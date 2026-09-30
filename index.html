@@ -636,7 +636,7 @@ async function loadModels(id){
 
 /* ---------- BOQ parsing ---------- */
 function parseRows(rows,file,sheet){
-  const kw={model:/model|unit code|part no/i,desc:/desc|particular|item desc|equipment|scope/i,hp:/\bhp\b|horse/i,kw:/\bkw\b|kilowatt/i,tr:/\btr\b|\bton/i,btu:/btu/i,cap:/capacity|size|rating/i,qty:/qty|quantity|no\.? of|pcs|nos/i,sys:/system|zone|tag|location|area/i,price:/^(?!.*total)(?=.*(unit\s*(price|cost)|price|u\/p\b))/i,amount:/amount|total\s*(price|cost)/i};
+  const kw={nm:/^(item\s*)?name$/i,ser:/^series$/i,model:/model|unit code|part no/i,desc:/desc|particular|item desc|equipment|scope/i,hp:/\bhp\b|horse/i,kw:/\bkw\b|kilowatt/i,tr:/\btr\b|\bton/i,btu:/btu/i,cap:/capacity|size|rating/i,qty:/qty|quantity|no\.? of|pcs|nos/i,sys:/system|zone|tag|location|area/i,price:/^(?!.*total)(?=.*(unit\s*(price|cost)|price|u\/p\b))/i,amount:/amount|total\s*(price|cost)/i};
   let hi=-1,best=0;
   for(let i=0;i<Math.min(rows.length,30);i++){const r=(rows[i]||[]).map(String);let sc=0;for(const k in kw)if(r.some(c=>c.length<40&&kw[k].test(c)))sc++;if(sc>best){best=sc;hi=i}}
   if(hi<0||best<2)return{file,sheet,error:'No header row found. Make sure the sheet has column titles such as Description, Model, Capacity and Qty.'};
@@ -645,7 +645,7 @@ function parseRows(rows,file,sheet){
   const lines=[];let id=0;
   for(let i=hi+1;i<rows.length;i++){
     const r=rows[i]||[];const g=k=>col[k]===undefined?'':String(r[col[k]]??'').trim();
-    const desc=g('desc'),model=g('model');
+    const desc=g('desc')||[g('nm'),g('ser')].filter(Boolean).join(' · '),model=g('model');
     if(!desc&&!model)continue;
     if(/sub-?total|total/i.test(desc)&&!model)continue;
     const q=parseFloat((g('qty')||'1').replace(/[^\d.]/g,''))||1;
@@ -676,7 +676,7 @@ function parseRows(rows,file,sheet){
     if(kind==='odu')matchLine(L);
     lines.push(L);
   }
-  const names={model:'Model',desc:'Description',hp:'Capacity (HP)',kw:'Capacity (kW)',tr:'Capacity (TR)',btu:'Capacity (BTU/h)',cap:'Capacity',qty:'Quantity',sys:'System / tag',price:'Unit price',amount:'Amount'};
+  const names={nm:'Description (name)',ser:'Description (series)',model:'Model',desc:'Description',hp:'Capacity (HP)',kw:'Capacity (kW)',tr:'Capacity (TR)',btu:'Capacity (BTU/h)',cap:'Capacity',qty:'Quantity',sys:'System / tag',price:'Unit price',amount:'Amount'};
   const instFound=lines.filter(l=>l.kind==='inst').reduce((s,l)=>s+l.amt,0)||null;
   return{file,sheet,headerRow:hi+1,lines,instFound,map:Object.entries(col).map(([k,j])=>({field:names[k],col:H[j]}))};
 }
@@ -803,7 +803,24 @@ async function readQuote(f){
   }catch(e){S.boq={file:f.name,error:e.message||'This PDF could not be read.'};render()}
 }
 /* equipment from the quotation that is not an outdoor unit (indoor units, controls, fittings) is shared across systems by HP */
-function quoteOther(){const b=S.boq;if(!b||!b.quote)return 0;return b.lines.filter(l=>l.kind!=='odu').reduce((s,l)=>s+(l.srp||0)*l.qty,0)}
+async function enrichBoq(b){ // match BOQ models to the MBT price list: type, capacity, description and SRP
+  const cat=await loadCatalog();if(!cat||!b||!b.lines)return 0;let n=0;
+  b.lines.forEach(l=>{if(l.kind==='inst')return;const k=normM(l.model);if(k.length<5)return;
+    const hit=cat.find(c=>c.key===k)||cat.find(c=>k.includes(c.key));if(!hit)return;
+    const cg=(hit.category||'').toUpperCase(),d=hit.description||'';let m;
+    l.kind=/OUTDOOR|ROOFTOP/.test(cg)?'odu':/INDOOR|QUANTUM/.test(cg)?'idu':/CONTROL|GATEWAY/.test(cg)?'acc':'other';
+    if(!l.desc||l.desc.length<4)l.desc=d||l.desc;else if(d)l.catDesc=d;
+    if(m=hit.model.match(/MVC-?M(\d{3,4})/i)){l.kw=+m[1]/10;l.hp=null;l.how='Midea model code'}
+    else if(!l.kw&&!l.hp){if(m=d.match(/([\d.]+)\s*HP/i))l.hp=+m[1];if(m=d.match(/([\d.]+)\s*KW/i))l.kw=+m[1];l.how='MBT price list'}
+    l.listSrp=hit.srp;n++;
+  });
+  const priced=b.lines.some(l=>l.kind==='odu'&&l.pM>0&&l.priceSrc==='BOQ');
+  if(!priced){let sum=0;b.lines.forEach(l=>{if(l.listSrp){l.srp=l.listSrp;sum+=l.srp*l.qty;if(l.kind==='odu'&&l.pM==null){l.pM=l.srp;l.priceSrc='Quote'}}});
+    if(sum>0)b.srpList={sum,n,unlisted:b.lines.filter(l=>!l.listSrp&&l.kind!=='inst').length}}
+  b.lines.filter(l=>l.kind==='odu').forEach(l=>{if(!l.confirmed)matchLine(l)});
+  b.enriched=1;return n;
+}
+function quoteOther(){const b=S.boq;if(!b||!(b.quote||b.srpList))return 0;return b.lines.filter(l=>l.kind!=='odu').reduce((s,l)=>s+(l.srp||0)*l.qty,0)}
 function oduHpTotal(){return(S.boq&&S.boq.lines||[]).filter(l=>l.kind==='odu'&&l.mHp).reduce((s,l)=>s+l.mHp*l.qty,0)}
 function allocM(m){const o=quoteOther(),h=oduHpTotal();return o&&h?o*m.hp/h:0}
 
@@ -1020,13 +1037,14 @@ function vBoq(){
      <div class="sub-h">Columns we recognised</div>
      <div class="maprow">${b.map.map(m=>`<span class="mapc"><em>${esc(m.col)}</em><span class="ms" aria-hidden="true">arrow_forward</span>${esc(m.field)}</span>`).join('')}</div>
      ${Q?`<div class="stats"><div class="stat"><b>${peso(Q.sum)}</b><span>Equipment at SRP</span></div><div class="stat"><b>${Q.total?peso(Q.total):'-'}</b><span>Quotation total${Q.total&&Math.abs(Q.total-Q.sum)<=Math.max(5,Q.total*.002)?' ✓ matches':''}</span></div><div class="stat"><b>${Q.disc?Q.disc+'%':'-'}</b><span>Contractor discount on the quotation (not used)</span></div><div class="stat"><b>${Q.net?peso(Q.net):'-'}</b><span>Net quoted amount</span></div></div>`:''}
+     ${b.srpList?`<div class="note info"><span class="ms" aria-hidden="true">sell</span><span>The BOQ has no prices, so MBT equipment uses the SRP from the MBT price list: <b>${pesoFull(b.srpList.sum)}</b> for ${b.srpList.n} matched item${b.srpList.n>1?'s':''}.${b.srpList.unlisted?` ${b.srpList.unlisted} line${b.srpList.unlisted>1?'s are':' is'} not in the price list (for example pipes and refrigerant); those are covered by the installation allowance.`:''}</span></div>`:''}
      ${(b.warn||[]).map(w=>`<div class="note"><span class="ms" aria-hidden="true">warning</span><span>${esc(w)}</span></div>`).join('')}
      ${b.instFound?`<div class="note info"><span class="ms" aria-hidden="true">construction</span><span>Installation found in the BOQ: <b>${pesoFull(b.instFound)}</b> (${inst.length} line${inst.length>1?'s':''}). It is used as the contractor's MBT installation cost on step 4 instead of the % estimate.</span></div>`:''}
      <div class="note info"><span class="ms" aria-hidden="true">info</span><span>${Q?'Outdoor units drive the energy study. MBT equipment cost starts from the SRP of every line in the quotation, less the end-user discount you set on step 4; indoor units, controls and fittings are shared across the systems by HP.':'Outdoor units drive the energy study. Indoor units, controls and piping are listed for reference.'}</span></div>
     </div></section>
     <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">table_rows</span><h2>Lines found</h2></div>
-     <div class="tw"><table><thead><tr><th>${Q?'Page':'Row'}</th><th>Description</th><th>Model</th><th class="n">Qty</th>${Q?'<th class="n">SRP</th><th class="n">Sub-total</th>':''}<th>Capacity read</th><th>Type</th></tr></thead><tbody>
-     ${L.map(l=>`<tr><td class="muted mono">${l.row}</td><td>${esc(l.desc)}</td><td class="mono">${esc(l.model)||'<span class="muted">-</span>'}</td><td class="n">${num(l.qty)}${l.conf==='LOW'?'<br><span class="chip chk" style="padding:0 6px">confirm</span>':''}</td>${Q?`<td class="n">${l.srp?num(Math.round(l.srp)):'-'}</td><td class="n">${l.srp?num(Math.round(l.srp*l.qty)):'-'}</td>`:''}
+     <div class="tw"><table><thead><tr><th>${Q?'Page':'Row'}</th><th>Description</th><th>Model</th><th class="n">Qty</th>${Q||b.srpList?'<th class="n">SRP</th><th class="n">Sub-total</th>':''}<th>Capacity read</th><th>Type</th></tr></thead><tbody>
+     ${L.map(l=>`<tr><td class="muted mono">${l.row}</td><td>${esc(l.desc)}</td><td class="mono">${esc(l.model)||'<span class="muted">-</span>'}</td><td class="n">${num(l.qty)}${l.conf==='LOW'?'<br><span class="chip chk" style="padding:0 6px">confirm</span>':''}</td>${Q||b.srpList?`<td class="n">${l.srp?num(Math.round(l.srp)):'-'}</td><td class="n">${l.srp?num(Math.round(l.srp*l.qty)):'-'}</td>`:''}
       <td>${l.note?`<small class="muted">${esc(l.note)}</small><br>`:''}${l.kind==='inst'?(l.amt?pesoFull(l.amt):'<span class="muted">-</span>'):l.hp?num(l.hp,l.hp%1?1:0)+' HP':l.kw?num(l.kw,1)+' kW':'<span class="muted">-</span>'}${l.how?`<br><small class="muted">${esc(l.how)}</small>`:''}</td>
       <td>${{odu:'<span class="chip acc">Outdoor unit</span>',idu:'<span class="chip">Indoor unit</span>',acc:'<span class="chip">Control</span>',other:'<span class="chip">Other</span>',inst:'<span class="chip">Installation</span>'}[l.kind]}</td></tr>`).join('')}
      </tbody></table></div></section>`;
@@ -1073,8 +1091,8 @@ function ciF(key,label){
    <div class="affix"><span>₱</span><input id="ci-${key}" type="text" inputmode="decimal" data-ci="${key}" value="${v!=null?num(Math.round(v)):''}" placeholder="${num(Math.round(est))} (${c.instPct}% estimate)"><span>total</span></div></div>`;
 }
 function quoteNote(){
-  const b=S.boq;if(!b||!b.quote)return'';const Q=b.quote;
-  return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">request_quote</span><span>Quotation ${esc(Q.control||b.file)}: <b>${pesoFull(Q.sum)}</b> at SRP for everything quoted${S.costs.euDisc?`, less the ${S.costs.euDisc}% end-user discount = <b>${pesoFull(Q.sum*(1-S.costs.euDisc/100))}</b> used for MBT equipment`:', used for MBT equipment at full SRP (no end-user discount set)'}.${Q.disc?` The ${Q.disc}% on the quotation is a contractor discount and is not used.`:''} The SRP per HP applies only to systems without a quoted price.</span></div>`;
+  const b=S.boq;if(!b||!(b.quote||b.srpList))return'';const Q=b.quote||{control:'MBT price list (BOQ items)',sum:b.srpList.sum,disc:null};
+  return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">request_quote</span><span>${b.quote?'Quotation ':'SRP from the '}${esc(Q.control||b.file)}: <b>${pesoFull(Q.sum)}</b> at SRP for everything quoted${S.costs.euDisc?`, less the ${S.costs.euDisc}% end-user discount = <b>${pesoFull(Q.sum*(1-S.costs.euDisc/100))}</b> used for MBT equipment`:', used for MBT equipment at full SRP (no end-user discount set)'}.${Q.disc?` The ${Q.disc}% on the quotation is a contractor discount and is not used.`:''} The SRP per HP applies only to systems without a quoted price.</span></div>`;
 }
 function priceTable(){
   const h2h=S.project.mode==='h2h',cb=compBrand(),c=S.costs;
@@ -1288,7 +1306,7 @@ function studyFacts(R){
     ['Electricity rate',`PHP ${R.T.toFixed(2)}/kWh`,'Meralco average, Sep 2026, unless replaced'],
     ['Yearly rate increase',`${c.esc}%`,'Assumption'],
     ['Discount rate',`${c.disc}%`,'Client cost of money'],
-    ['MBT equipment price',(S.boq&&S.boq.quote?`SRP from quotation ${S.boq.quote.control||S.boq.file}: PHP ${nf(S.boq.quote.sum)} incl. indoor units, controls and fittings`:anyOv('pM')?`System prices${S.boq.lines.some(l=>l.priceSrc==='BOQ')?' from the BOQ':''}; SRP PHP ${nf(c.priceM)}/HP where blank`:`SRP PHP ${nf(c.priceM)}/HP`)+(c.euDisc?`, less ${c.euDisc}% end-user discount on SRP`:' at full SRP (no end-user discount)'),S.boq&&S.boq.quote?'MBT price list (SRP)':'MBT price list or quotation'],
+    ['MBT equipment price',(S.boq&&S.boq.quote?`SRP from quotation ${S.boq.quote.control||S.boq.file}: PHP ${nf(S.boq.quote.sum)} incl. indoor units, controls and fittings`:S.boq&&S.boq.srpList?`SRP from the MBT price list for the BOQ items: PHP ${nf(S.boq.srpList.sum)} incl. indoor units, controls and fittings`:anyOv('pM')?`System prices${S.boq.lines.some(l=>l.priceSrc==='BOQ')?' from the BOQ':''}; SRP PHP ${nf(c.priceM)}/HP where blank`:`SRP PHP ${nf(c.priceM)}/HP`)+(c.euDisc?`, less ${c.euDisc}% end-user discount on SRP`:' at full SRP (no end-user discount)'),S.boq&&(S.boq.quote||S.boq.srpList)?'MBT price list (SRP)':'MBT price list or quotation'],
     ...(h2h?[[`${cn} equipment price`,anyOv('pC')?`System prices; PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP where blank`:`PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP`,'Market estimate']]:[]),
     ['Installation',[c.cInstM!=null?`MBT PHP ${nf(c.cInstM)} quoted by the contractor`:'',h2h&&c.cInstD!=null?`${cn} PHP ${nf(c.cInstD)} quoted by the contractor`:''].filter(Boolean).concat((c.cInstM==null||(h2h&&c.cInstD==null))?[`${(anyOv('iM')&&c.cInstM==null)||(anyOv('iC')&&c.cInstD==null)?'system prices, else ':''}${c.instPct}% of SRP${c.cInstM!=null||c.cInstD!=null?' for '+(c.cInstM!=null?cn:'MBT'):''}`]:[]).join('; '),c.cInstM!=null||c.cInstD!=null?'Contractor':'Estimate'],
     ['Maintenance',`${c.mntPct}% of SRP over ${c.mntYrs} years (${(c.mntPct/Math.max(1,c.mntYrs)).toFixed(2).replace(/\.?0+$/,'')}% of SRP a year), preventive maintenance and repairs, same rule for both brands`,'Allocation'],
@@ -1741,7 +1759,8 @@ async function loadStudies(){
   paintStudies();
 }
 async function loadNames(){try{const r=await DB.from('user_profiles').select('id,name');if(!r.error)r.data.forEach(p=>NAMES[p.id]=p.name);paintStudies();renderSteps()}catch(e){}}
-function initStudies(){loadNames();loadStudies();queueStudy()}
+function upgradeBoq(){const b=S&&S.boq;if(b&&b.lines&&!b.quote&&!b.enriched&&!b.sample&&!b.error&&DB)enrichBoq(b).then(()=>{render(false,true)},()=>{})}
+function initStudies(){loadNames();loadStudies();queueStudy();upgradeBoq()}
 const whoName=(id,poss)=>!id?'':id===UIDf()?(poss?'your':'You'):((NAMES[id]||'a teammate')+(poss?'’s':''));
 function whenTxt(iso){if(!iso)return'';const d=new Date(iso),s=(Date.now()-d)/1000;if(s<60)return'Just now';if(s<3600)return Math.round(s/60)+' min ago';if(s<86400&&d.getDate()===new Date().getDate())return'Today '+d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});return d.toLocaleDateString([],{day:'numeric',month:'short',year:d.getFullYear()===new Date().getFullYear()?undefined:'numeric'})}
 function resTxt(r){
@@ -1791,7 +1810,7 @@ async function loadDoc(id){const r=await DB.from('tco_studies').select('state,ow
 async function openStudy(id){
   if(id===S.sid){S.view='wizard';render(true);return}
   if(ST.busy)return;ST.busy=true;
-  try{await flushStudy();const d=await loadDoc(id);S=d.state;S.sid=id;S.owner=d.owner;normS();markSynced();render(true);
+  try{await flushStudy();const d=await loadDoc(id);S=d.state;S.sid=id;S.owner=d.owner;normS();markSynced();render(true);upgradeBoq();
     toast(d.owner!==UIDf()?`Opened ${whoName(d.owner,1)} study. Your changes save to their study.`:`Opened ${S.project.name||'study'}`)}
   catch(e){toast('Could not open that study. It may have been deleted.')}
   ST.busy=false;
@@ -1949,8 +1968,9 @@ function readFile(f){
     const wb=XLSX.read(new Uint8Array(r.result),{type:'array'});let best=null;
     wb.SheetNames.forEach(n=>{const rows=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:'',raw:false});const p=parseRows(rows,f.name,n);if(!p.error){const k=p.lines.filter(l=>l.kind==='odu').length*10+p.lines.length;if(!best||k>best.k)best={p,k}}else if(!best)best={p,k:-1}});
     S.boq=best?best.p:{file:f.name,error:'The file has no sheets.'};
-    if(!S.boq.error){if(S.boq.instFound){S.costs.cInstM=S.boq.instFound;S.costs.cInstSrc='BOQ'}else if(S.costs.cInstSrc==='BOQ'){S.costs.cInstM=null;S.costs.cInstSrc=null}}const o=S.boq.lines?S.boq.lines.filter(l=>l.kind==='odu').length:0;
-    render();toast(S.boq.error?'Could not read the BOQ':`Read ${S.boq.lines.length} lines, ${o} outdoor unit line${o===1?'':'s'}`);
+    if(!S.boq.error){if(S.boq.instFound){S.costs.cInstM=S.boq.instFound;S.costs.cInstSrc='BOQ'}else if(S.costs.cInstSrc==='BOQ'){S.costs.cInstM=null;S.costs.cInstSrc=null}}
+    const done=()=>{const L=S.boq.lines||[],o=L.filter(l=>l.kind==='odu').length,i=L.filter(l=>l.kind==='idu').reduce((s,l)=>s+l.qty,0);render();toast(S.boq.error?'Could not read the BOQ':`Read ${L.length} lines: ${o} outdoor unit line${o===1?'':'s'}, ${num(i)} indoor unit${i===1?'':'s'}`)};
+    if(S.boq.error){done()}else{render();enrichBoq(S.boq).then(done,done)}
   }catch(err){S.boq={file:f.name,error:'This file could not be opened. Save it as .xlsx or .csv and try again.'};render()}};
   r.readAsArrayBuffer(f);
 }
