@@ -388,7 +388,7 @@ const TEMPLATE='System,Tag,Description,Brand,Model,Capacity_HP,Capacity_kW,Qty,R
 const DEF={
   step:0,view:'wizard',
   project:{client:'Sample client (example)',name:'Sample Office Tower',city:'Metro Manila',type:'office',mode:'h2h',years:15,compId:DAIKIN.id},
-  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:25,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null},
+  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:25,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null,euDisc:0},
   wi:{tariff:0,hours:0,priceD:0},
   boq:null
 };
@@ -727,8 +727,9 @@ function linePrice(x,k,pD){ // per unit, pesos. Blank override = default rule
   const c=S.costs,l=x.l,fw=k==='m'?1:(pD/c.priceD||1);
   const ov=k==='m'?l.pM:l.pC,io=k==='m'?l.iM:l.iC;
   const cab=k==='m'?x.m.mods:(x.cm?x.cm.list.reduce((s,y)=>s+(y.mods||1),0):1);
-  const al=k==='m'?allocM(x.m):0,ct=k==='m'?c.cInstM:c.cInstD;
-  const eq=(ov!=null?ov*fw:x.m.hp*(k==='m'?c.priceM:pD))+al;
+  const dk=k==='m'?1-(c.euDisc||0)/100:1; // end-user discount applies to MBT SRP prices (quotation and price per HP), not to prices typed per system
+  const al=k==='m'?allocM(x.m)*dk:0,ct=k==='m'?c.cInstM:c.cInstD;
+  const eq=(ov!=null?ov*fw*(k==='m'&&l.priceSrc==='Quote'?dk:1):x.m.hp*(k==='m'?c.priceM*dk:pD))+al;
   const inst=io!=null&&ct==null?io*fw:eq*c.instPct/100; // a contractor total replaces this in compute()
   return{eq,inst,cab,al,eqOv:ov!=null||al>0,inOv:io!=null||ct!=null,ct};
 }
@@ -839,10 +840,10 @@ function vBoq(){
      <div class="stats"><div class="stat"><b>${L.length}</b><span>Lines read</span></div><div class="stat"><b>${sumq(odu)}</b><span>Outdoor units (study)</span></div><div class="stat"><b>${sumq(idu)}</b><span>Indoor units</span></div><div class="stat"><b>${oth.length}</b><span>Controls, piping, other</span></div></div>
      <div class="sub-h">Columns we recognised</div>
      <div class="maprow">${b.map.map(m=>`<span class="mapc"><em>${esc(m.col)}</em><span class="ms" aria-hidden="true">arrow_forward</span>${esc(m.field)}</span>`).join('')}</div>
-     ${Q?`<div class="stats"><div class="stat"><b>${peso(Q.sum)}</b><span>Equipment at SRP (used for MBT)</span></div><div class="stat"><b>${Q.total?peso(Q.total):'-'}</b><span>Quotation total${Q.total&&Math.abs(Q.total-Q.sum)<=Math.max(5,Q.total*.002)?' ✓ matches':''}</span></div><div class="stat"><b>${Q.disc?Q.disc+'%':'-'}</b><span>Quoted discount (not applied)</span></div><div class="stat"><b>${Q.net?peso(Q.net):'-'}</b><span>Net quoted amount</span></div></div>`:''}
+     ${Q?`<div class="stats"><div class="stat"><b>${peso(Q.sum)}</b><span>Equipment at SRP</span></div><div class="stat"><b>${Q.total?peso(Q.total):'-'}</b><span>Quotation total${Q.total&&Math.abs(Q.total-Q.sum)<=Math.max(5,Q.total*.002)?' ✓ matches':''}</span></div><div class="stat"><b>${Q.disc?Q.disc+'%':'-'}</b><span>Contractor discount on the quotation (not used)</span></div><div class="stat"><b>${Q.net?peso(Q.net):'-'}</b><span>Net quoted amount</span></div></div>`:''}
      ${(b.warn||[]).map(w=>`<div class="note"><span class="ms" aria-hidden="true">warning</span><span>${esc(w)}</span></div>`).join('')}
      ${b.instFound?`<div class="note info"><span class="ms" aria-hidden="true">construction</span><span>Installation found in the BOQ: <b>${pesoFull(b.instFound)}</b> (${inst.length} line${inst.length>1?'s':''}). It is used as the contractor's MBT installation cost on step 4 instead of the % estimate.</span></div>`:''}
-     <div class="note info"><span class="ms" aria-hidden="true">info</span><span>${Q?'Outdoor units drive the energy study. MBT equipment cost is the SRP of every line in the quotation; indoor units, controls and fittings are shared across the systems by HP.':'Outdoor units drive the energy study. Indoor units, controls and piping are listed for reference.'}</span></div>
+     <div class="note info"><span class="ms" aria-hidden="true">info</span><span>${Q?'Outdoor units drive the energy study. MBT equipment cost starts from the SRP of every line in the quotation, less the end-user discount you set on step 4; indoor units, controls and fittings are shared across the systems by HP.':'Outdoor units drive the energy study. Indoor units, controls and piping are listed for reference.'}</span></div>
     </div></section>
     <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">table_rows</span><h2>Lines found</h2></div>
      <div class="tw"><table><thead><tr><th>${Q?'Page':'Row'}</th><th>Description</th><th>Model</th><th class="n">Qty</th>${Q?'<th class="n">SRP</th><th class="n">Sub-total</th>':''}<th>Capacity read</th><th>Type</th></tr></thead><tbody>
@@ -890,7 +891,7 @@ function ciF(key,label){
 }
 function quoteNote(){
   const b=S.boq;if(!b||!b.quote)return'';const Q=b.quote;
-  return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">request_quote</span><span>MBT equipment is priced at SRP from quotation ${esc(Q.control||b.file)}: <b>${pesoFull(Q.sum)}</b> for everything quoted.${Q.disc?` The quoted ${Q.disc}% discount is not applied.`:''} The MBT price per HP is used only for systems without a quoted price.</span></div>`;
+  return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">request_quote</span><span>Quotation ${esc(Q.control||b.file)}: <b>${pesoFull(Q.sum)}</b> at SRP for everything quoted${S.costs.euDisc?`, less the ${S.costs.euDisc}% end-user discount = <b>${pesoFull(Q.sum*(1-S.costs.euDisc/100))}</b> used for MBT equipment`:', used for MBT equipment at full SRP (no end-user discount set)'}.${Q.disc?` The ${Q.disc}% on the quotation is a contractor discount and is not used.`:''} The SRP per HP applies only to systems without a quoted price.</span></div>`;
 }
 function priceTable(){
   const h2h=S.project.mode==='h2h',cb=compBrand(),c=S.costs;
@@ -904,7 +905,7 @@ function priceTable(){
     return`<tr><td><div class="cell-m"><b>${esc(l.sys||'System')}</b><small>${m.hp} HP × ${num(l.qty)}${tag}</small></div></td>${cell(l,'pM',a.eq-a.al,'MBT outdoor unit price per unit')}${c.cInstM!=null?fixed(rx&&rx.inM):cell(l,'iM',a.inst,'MBT installation per unit')}${h2h?cell(l,'pC',b.eq,cn(cb)+' equipment per unit')+(c.cInstD!=null?fixed(rx&&rx.inD):cell(l,'iC',b.inst,cn(cb)+' installation per unit')):''}</tr>`}).join('');
   function cn(b){return b?brandName(b):'Competitor'}
   return`<div class="card-b" style="border-top:1px solid var(--line)"><div class="sub-h" style="margin-top:0;display:flex;align-items:center;gap:8px">Price by system <span class="chip">Optional</span>${any?'<button type="button" class="btn sm ghost" data-clearprices="1" style="margin-left:auto">Clear system prices</button>':''}</div>
-   <p class="muted" style="margin:0 0 10px;font-size:12.5px">Per outdoor unit. Leave a cell blank to use the rates above (grey figures).${boq?' Unit prices found in the BOQ are filled in as MBT equipment prices; check they exclude installation.':''}${quote?' MBT outdoor unit prices are the SRP from the quotation.':''}${oth?` MBT equipment also carries <b>${pesoFull(oth)}</b> of indoor units, controls and fittings from the quotation, shared across systems by HP.`:''}</p>
+   <p class="muted" style="margin:0 0 10px;font-size:12.5px">Per outdoor unit. Leave a cell blank to use the rates above (grey figures).${boq?' Unit prices found in the BOQ are filled in as MBT equipment prices; check they exclude installation.':''}${quote?` MBT outdoor unit prices are the SRP from the quotation${S.costs.euDisc?`; the ${S.costs.euDisc}% end-user discount is applied to them and to the shared items`:''}. A price you type yourself is used as it is.`:''}${oth?` MBT equipment also carries <b>${pesoFull(oth)}</b> of indoor units, controls and fittings from the quotation, shared across systems by HP.`:''}</p>
    <div class="tw"><table class="ptab"><thead><tr><th>System</th><th>MBT ${oth?'outdoor unit':'equipment'}</th><th>MBT installation</th>${h2h?`<th>${esc(cn(cb))} equipment</th><th>${esc(cn(cb))} installation</th>`:''}</tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function vCosts(){
@@ -935,7 +936,8 @@ function vCosts(){
    </div></section>
   <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">sell</span><h2>Prices</h2></div>
    <div class="card-b grid2">
-    ${numF('c-pm2','MBT price per HP','priceM','₱','/ HP','From the MBT price list. Used for any system without its own price below.',1,100)}
+    ${numF('c-pm2','MBT SRP per HP','priceM','₱','/ HP','SRP from the MBT price list. Used for any system without its own price below.',1,100)}
+    ${numF('c-eud','End-user discount from SRP','euDisc','','% off SRP','The discount the end-user actually gets off SRP. Discounts printed on quotations are usually for contractors and dealers, so they are not used. Applies to SRP prices (quotation and SRP per HP); prices you type per system are used as they are.',0,.5)}
     ${h2h?numF('c-pd',`${esc(cb.name)} price per HP`,'priceD','₱','/ HP','Market estimate for the same duty. Shown as "estimated" on the report.',1,100):'<div></div>'}
     ${numF('c-ip','Installation estimate','instPct','','% of equipment','Piping, wiring, labour and commissioning as a share of equipment cost. Used unless the contractor gives an installation cost below.',1,1)}
     ${ciF('cInstM','MBT installation quoted by the contractor')}
@@ -1102,7 +1104,7 @@ function studyFacts(R){
     ['Electricity rate',`PHP ${R.T.toFixed(2)}/kWh`,'Meralco average, Sep 2026, unless replaced'],
     ['Yearly rate increase',`${c.esc}%`,'Assumption'],
     ['Discount rate',`${c.disc}%`,'Client cost of money'],
-    ['MBT equipment price',S.boq&&S.boq.quote?`SRP from quotation ${S.boq.quote.control||S.boq.file}: PHP ${nf(S.boq.quote.sum)} incl. indoor units, controls and fittings${S.boq.quote.disc?' (quoted discount not applied)':''}`:anyOv('pM')?`System prices${S.boq.lines.some(l=>l.priceSrc==='BOQ')?' from the BOQ':''}; PHP ${nf(c.priceM)}/HP where blank`:`PHP ${nf(c.priceM)}/HP`,S.boq&&S.boq.quote?'MBT price list (SRP)':'MBT price list or quotation'],
+    ['MBT equipment price',(S.boq&&S.boq.quote?`SRP from quotation ${S.boq.quote.control||S.boq.file}: PHP ${nf(S.boq.quote.sum)} incl. indoor units, controls and fittings`:anyOv('pM')?`System prices${S.boq.lines.some(l=>l.priceSrc==='BOQ')?' from the BOQ':''}; SRP PHP ${nf(c.priceM)}/HP where blank`:`SRP PHP ${nf(c.priceM)}/HP`)+(c.euDisc?`, less ${c.euDisc}% end-user discount on SRP`:' at full SRP (no end-user discount)'),S.boq&&S.boq.quote?'MBT price list (SRP)':'MBT price list or quotation'],
     ...(h2h?[[`${cn} equipment price`,anyOv('pC')?`System prices; PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP where blank`:`PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP`,'Market estimate']]:[]),
     ['Installation',[c.cInstM!=null?`MBT PHP ${nf(c.cInstM)} quoted by the contractor`:'',h2h&&c.cInstD!=null?`${cn} PHP ${nf(c.cInstD)} quoted by the contractor`:''].filter(Boolean).concat((c.cInstM==null||(h2h&&c.cInstD==null))?[`${(anyOv('iM')&&c.cInstM==null)||(anyOv('iC')&&c.cInstD==null)?'system prices, else ':''}${c.instPct}% of equipment${c.cInstM!=null||c.cInstD!=null?' for '+(c.cInstM!=null?cn:'MBT'):''}`]:[]).join('; '),c.cInstM!=null||c.cInstD!=null?'Contractor':'Estimate'],
     ['Preventive maintenance',`PHP ${nf(c.pm)}/HP/yr`,'MBT After-Sales rate card'],
@@ -1135,7 +1137,7 @@ function exportXlsx(){
   // Inputs
   const inp=[['Input','Value','Unit / note'],
     ['Electricity rate',R.T,'PHP/kWh'],['Yearly rate increase',c.esc/100,'%'],['Discount rate',c.disc/100,'%'],['Study period',N,'years'],['Service life',c.life||15,'years (residual value if study is shorter)'],
-    ['Total outdoor HP',R.hp,'HP'],['MBT price (default)',c.priceM,'PHP/HP, used where no system price'],[`${CN} price (default)`,h2h?pD:0,'PHP/HP, used where no system price'],
+    ['Total outdoor HP',R.hp,'HP'],['MBT price (default)',c.priceM*(1-(c.euDisc||0)/100),`PHP/HP, used where no system price${c.euDisc?` (SRP ${nf(c.priceM)} less ${c.euDisc}% end-user discount)`:''}`],[`${CN} price (default)`,h2h?pD:0,'PHP/HP, used where no system price'],
     ['Installation estimate',c.instPct/100,'% of equipment, used where no contractor figure'],['Installation quoted by contractor (MBT)',c.cInstM!=null?c.cInstM:0,c.cInstM!=null?'PHP, shared over systems by equipment cost (typed in Systems)':'none, estimate used'],
     ['Preventive maintenance',c.pm,'PHP/HP/yr'],['Repair reserve',c.rep/100,'% of equipment/yr'],
     ['MBT energy',R.M.kwh,'kWh/yr (from simulation, incl. indoor fans)'],[`${CN} energy`,h2h?R.D.kwh:0,'kWh/yr (from simulation, incl. indoor fans)'],
@@ -1741,6 +1743,7 @@ document.addEventListener('change',e=>{
   if(D.stwho){ST.who=t.value;paintStudies();return}
   if(D.lp){const v=parseFloat(t.value.replace(/[^\d.]/g,''));if(!isNaN(v))t.value=num(Math.round(v))}
   if(D.ci){render();return}
+  if(D.c==='euDisc'||D.c==='instPct'||D.c==='priceM'||D.c==='priceD'){render();return}
   if(D.cs){S.costs[D.cs]=+t.value;save()}
   if(D.cstr){S.costs[D.cstr]=t.value;save()}
   if(D.cb){S.costs[D.cb]=t.checked;if(t.checked)S.costs.tier=2;render()}
