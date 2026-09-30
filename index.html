@@ -566,7 +566,7 @@ const TEMPLATE='System,Tag,Description,Brand,Model,Capacity_HP,Capacity_kW,Qty,R
 const DEF={
   step:0,view:'wizard',
   project:{client:'Sample client (example)',name:'Sample Office Tower',city:'Metro Manila',type:'office',mode:'h2h',years:15,compId:DAIKIN.id},
-  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:25,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null,euDisc:0},
+  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:35,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null,euDisc:0,mntPct:25,mntYrs:10,v16:1},
   wi:{tariff:0,hours:0,priceD:0},
   boq:null
 };
@@ -908,8 +908,9 @@ function linePrice(x,k,pD){ // per unit, pesos. Blank override = default rule
   const dk=k==='m'?1-(c.euDisc||0)/100:1; // end-user discount applies to MBT SRP prices (quotation and price per HP), not to prices typed per system
   const al=k==='m'?allocM(x.m)*dk:0,ct=k==='m'?c.cInstM:c.cInstD;
   const eq=(ov!=null?ov*fw*(k==='m'&&l.priceSrc==='Quote'?dk:1):x.m.hp*(k==='m'?c.priceM*dk:pD))+al;
-  const inst=io!=null&&ct==null?io*fw:eq*c.instPct/100; // a contractor total replaces this in compute()
-  return{eq,inst,cab,al,eqOv:ov!=null||al>0,inOv:io!=null||ct!=null,ct};
+  const srp=(ov!=null?ov*fw:x.m.hp*(k==='m'?c.priceM:pD))+(k==='m'?allocM(x.m):0); // equipment at SRP, before any end-user discount
+  const inst=io!=null&&ct==null?io*fw:srp*c.instPct/100; // installation allowance = % of SRP; a contractor total replaces this in compute()
+  return{eq,srp,inst,cab,al,eqOv:ov!=null||al>0,inOv:io!=null||ct!=null||Math.abs(srp-eq)>.5,ct};
 }
 function compute(){
   const c=S.costs,w=S.wi,N=S.project.years,d=c.disc/100,e=c.esc/100,h2h=S.project.mode==='h2h';
@@ -943,13 +944,13 @@ function compute(){
     const kwhOdu=sys.reduce((s,x)=>s+(k==='m'?x.kwhM:(x.kwhC||0)),0),kwh=kwhOdu+fanKwh;
     const peak=sys.reduce((s,x)=>s+(k==='m'?x.peakM:(x.peakC||0)),0)+fanKW,demYr=peak*(c.dem||0)*12*(1+w.tariff/100);
     const mods=sys.reduce((s,x)=>s+(k==='m'?x.modsM:x.modsD),0);
-    let equip=0,inst=0;const prs=sys.map(x=>linePrice(x,k,pD));prs.forEach((pr,i)=>equip+=pr.eq*sys[i].q);
+    let equip=0,inst=0,srp=0;const prs=sys.map(x=>linePrice(x,k,pD));prs.forEach((pr,i)=>{equip+=pr.eq*sys[i].q;srp+=pr.srp*sys[i].q});
     const ct=k==='m'?c.cInstM:c.cInstD;
     sys.forEach((x,i)=>{const pr=prs[i];if(ct!=null)pr.inst=equip?ct*pr.eq/equip:0;if(k==='m'){x.eqM=pr.eq;x.inM=pr.inst}else{x.eqD=pr.eq;x.inD=pr.inst}inst+=pr.inst*x.q});const capex=equip+inst;
-    const pm=c.pm*hp,rep=equip*c.rep/100;let pvE=0,pvM=0,pvR=0;const cum=[capex];
-    for(let t=1;t<=N;t++){const df=1/Math.pow(1+d,t),g=Math.pow(1+e,t-1);const Et=(kwh*T+demYr)*g*df,Mt=pm*g*df,Rt=rep*g*df;pvE+=Et;pvM+=Mt;pvR+=Rt;cum.push(cum[t-1]+Et+Mt+Rt)}
+    const mnt=srp*(c.mntPct||0)/100/Math.max(1,c.mntYrs||10),pm=mnt,rep=0;let pvE=0,pvM=0,pvR=0;const cum=[capex]; // maintenance allowance: % of SRP spread evenly over the span, same yearly amount after
+    for(let t=1;t<=N;t++){const df=1/Math.pow(1+d,t),g=Math.pow(1+e,t-1);const Et=(kwh*T+demYr)*g*df,Mt=mnt*df;pvE+=Et;pvM+=Mt;cum.push(cum[t-1]+Et+Mt)}
     const resid=N<c.life?capex*(c.life-N)/c.life/Math.pow(1+d,N):0;cum[N]-=resid;
-    return{kwh,kwhOdu,peak,demYr,mods,equip,inst,capex,pvE,pvM,pvR,resid,tco:capex+pvE+pvM+pvR-resid,cum,yr1:kwh*T+demYr+pm+rep};
+    return{kwh,kwhOdu,peak,demYr,mods,equip,srp,mnt,inst,capex,pvE,pvM,pvR,resid,tco:capex+pvE+pvM+pvR-resid,cum,yr1:kwh*T+demYr+pm+rep};
   };
   const M=side('m'),D=side('d');
   let cross=null;for(let t=0;t<=N;t++)if(M.cum[t]<=D.cum[t]){cross=t;break}
@@ -1062,8 +1063,12 @@ function numF(id,label,key,pre,suf,help,ex,step){
   return`<div class="f"><label for="${id}">${label}${help?tip(help):''}${ex?' <span class="chip ex">Example</span>':''}</label>
    <div class="affix">${pre?`<span>${pre}</span>`:''}<input id="${id}" type="number" inputmode="decimal" step="${step||'any'}" data-c="${key}" value="${S.costs[key]}">${suf?`<span>${suf}</span>`:''}</div></div>`;
 }
+function mntNote(){
+  const c=S.costs;let R=null;try{R=compute()}catch(e){}if(!R)return'';const h2h=S.project.mode==='h2h',yr=(c.mntPct/Math.max(1,c.mntYrs)).toFixed(2).replace(/\.?0+$/,'');
+  return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">calendar_month</span><span>${c.mntPct}% of SRP over ${c.mntYrs} years = ${yr}% of SRP a year: <b>${pesoFull(R.M.mnt)}</b> a year for MBT${h2h?` and <b>${pesoFull(R.D.mnt)}</b> for ${esc(brandName(compBrand()))}`:''}.</span></div>`;
+}
 function ciF(key,label){
-  const c=S.costs,v=c[key];let est=0;try{const R=compute();est=key==='cInstM'?R.M.equip*c.instPct/100:R.D.equip*c.instPct/100}catch(e){}
+  const c=S.costs,v=c[key];let est=0;try{const R=compute();est=key==='cInstM'?R.M.srp*c.instPct/100:R.D.srp*c.instPct/100}catch(e){}
   return`<div class="f"><label for="ci-${key}">${label}${tip('Enter the installation amount from the contractor\'s total CAPEX if you have it. Leave blank to use the % estimate.')}${key==='cInstM'&&c.cInstSrc==='BOQ'?' <span class="chip ok">From BOQ</span>':''}</label>
    <div class="affix"><span>₱</span><input id="ci-${key}" type="text" inputmode="decimal" data-ci="${key}" value="${v!=null?num(Math.round(v)):''}" placeholder="${num(Math.round(est))} (${c.instPct}% estimate)"><span>total</span></div></div>`;
 }
@@ -1117,15 +1122,16 @@ function vCosts(){
     ${numF('c-pm2','MBT SRP per HP','priceM','₱','/ HP','SRP from the MBT price list. Used for any system without its own price below.',1,100)}
     ${numF('c-eud','End-user discount from SRP','euDisc','','% off SRP','The discount the end-user actually gets off SRP. Discounts printed on quotations are usually for contractors and dealers, so they are not used. Applies to SRP prices (quotation and SRP per HP); prices you type per system are used as they are.',0,.5)}
     ${h2h?numF('c-pd',`${esc(cb.name)} price per HP`,'priceD','₱','/ HP','Market estimate for the same duty. Shown as "estimated" on the report.',1,100):'<div></div>'}
-    ${numF('c-ip','Installation estimate','instPct','','% of equipment','Piping, wiring, labour and commissioning as a share of equipment cost. Used unless the contractor gives an installation cost below.',1,1)}
+    ${numF('c-ip','Installation allowance','instPct','','% of SRP','Piping, wiring, labour and commissioning as a share of the equipment SRP (before any end-user discount). Used unless the contractor gives an installation cost below.',0,1)}
     ${ciF('cInstM','MBT installation quoted by the contractor')}
     ${h2h?ciF('cInstD',`${esc(cb.name)} installation quoted by the contractor`):''}
     ${quoteNote()}
    </div>${priceTable()}</section>
-  <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">build</span><h2>Maintenance</h2><div class="r"><span class="chip">Same rate for both brands</span></div></div>
+  <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">build</span><h2>Maintenance</h2><div class="r"><span class="chip">Same rule for both brands</span></div></div>
    <div class="card-b grid2">
-    ${numF('c-pmr','Preventive maintenance','pm','₱','/ HP / yr','From the MBT After-Sales rate card.',1,50)}
-    ${numF('c-rep','Repair reserve','rep','','% of equip / yr','Yearly allowance for parts and repairs.',1,.1)}
+    ${numF('c-mnt','Maintenance allowance','mntPct','','% of SRP','Preventive maintenance and repairs together, as a share of the equipment SRP.',0,1)}
+    ${numF('c-mny','Spread over','mntYrs','','years','The allowance is spent evenly over these years. If the study runs longer, the same yearly amount continues.',0,1)}
+    ${mntNote()}
    </div></section>
   <details class="card adv" ${S.advOpen?'open':''}><summary class="card-h"><span class="ms" aria-hidden="true">tune</span><h2>Engineering settings</h2><div class="r"><span class="chip">Optional</span><span class="ms chev" aria-hidden="true">expand_more</span></div></summary>
    <div class="card-b stack">
@@ -1284,9 +1290,8 @@ function studyFacts(R){
     ['Discount rate',`${c.disc}%`,'Client cost of money'],
     ['MBT equipment price',(S.boq&&S.boq.quote?`SRP from quotation ${S.boq.quote.control||S.boq.file}: PHP ${nf(S.boq.quote.sum)} incl. indoor units, controls and fittings`:anyOv('pM')?`System prices${S.boq.lines.some(l=>l.priceSrc==='BOQ')?' from the BOQ':''}; SRP PHP ${nf(c.priceM)}/HP where blank`:`SRP PHP ${nf(c.priceM)}/HP`)+(c.euDisc?`, less ${c.euDisc}% end-user discount on SRP`:' at full SRP (no end-user discount)'),S.boq&&S.boq.quote?'MBT price list (SRP)':'MBT price list or quotation'],
     ...(h2h?[[`${cn} equipment price`,anyOv('pC')?`System prices; PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP where blank`:`PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP`,'Market estimate']]:[]),
-    ['Installation',[c.cInstM!=null?`MBT PHP ${nf(c.cInstM)} quoted by the contractor`:'',h2h&&c.cInstD!=null?`${cn} PHP ${nf(c.cInstD)} quoted by the contractor`:''].filter(Boolean).concat((c.cInstM==null||(h2h&&c.cInstD==null))?[`${(anyOv('iM')&&c.cInstM==null)||(anyOv('iC')&&c.cInstD==null)?'system prices, else ':''}${c.instPct}% of equipment${c.cInstM!=null||c.cInstD!=null?' for '+(c.cInstM!=null?cn:'MBT'):''}`]:[]).join('; '),c.cInstM!=null||c.cInstD!=null?'Contractor':'Estimate'],
-    ['Preventive maintenance',`PHP ${nf(c.pm)}/HP/yr`,'MBT After-Sales rate card'],
-    ['Repair reserve',`${c.rep}% of equipment/yr`,'Typical'],
+    ['Installation',[c.cInstM!=null?`MBT PHP ${nf(c.cInstM)} quoted by the contractor`:'',h2h&&c.cInstD!=null?`${cn} PHP ${nf(c.cInstD)} quoted by the contractor`:''].filter(Boolean).concat((c.cInstM==null||(h2h&&c.cInstD==null))?[`${(anyOv('iM')&&c.cInstM==null)||(anyOv('iC')&&c.cInstD==null)?'system prices, else ':''}${c.instPct}% of SRP${c.cInstM!=null||c.cInstD!=null?' for '+(c.cInstM!=null?cn:'MBT'):''}`]:[]).join('; '),c.cInstM!=null||c.cInstD!=null?'Contractor':'Estimate'],
+    ['Maintenance',`${c.mntPct}% of SRP over ${c.mntYrs} years (${(c.mntPct/Math.max(1,c.mntYrs)).toFixed(2).replace(/\.?0+$/,'')}% of SRP a year), preventive maintenance and repairs, same rule for both brands`,'Allocation'],
     ...(c.dem?[['Demand charge',`PHP ${nf(c.dem)}/kW/month`,'Client tariff']]:[]),
     ['Indoor fans',`${c.fanW} W per kW of indoor capacity`,'Same for both options'],
     ['Grid emission factor',`${c.ef} tCO2/MWh`,'Approximate, Philippine grid']
@@ -1316,32 +1321,32 @@ function exportXlsx(){
   const inp=[['Input','Value','Unit / note'],
     ['Electricity rate',R.T,'PHP/kWh'],['Yearly rate increase',c.esc/100,'%'],['Discount rate',c.disc/100,'%'],['Study period',N,'years'],['Service life',c.life||15,'years (residual value if study is shorter)'],
     ['Total outdoor HP',R.hp,'HP'],['MBT price (default)',c.priceM*(1-(c.euDisc||0)/100),`PHP/HP, used where no system price${c.euDisc?` (SRP ${nf(c.priceM)} less ${c.euDisc}% end-user discount)`:''}`],[`${CN} price (default)`,h2h?pD:0,'PHP/HP, used where no system price'],
-    ['Installation estimate',c.instPct/100,'% of equipment, used where no contractor figure'],['Installation quoted by contractor (MBT)',c.cInstM!=null?c.cInstM:0,c.cInstM!=null?'PHP, shared over systems by equipment cost (typed in Systems)':'none, estimate used'],
-    ['Preventive maintenance',c.pm,'PHP/HP/yr'],['Repair reserve',c.rep/100,'% of equipment/yr'],
+    ['Installation allowance',c.instPct/100,'% of SRP, used where no contractor figure (typed per system when a discount applies)'],['Installation quoted by contractor (MBT)',c.cInstM!=null?c.cInstM:0,c.cInstM!=null?'PHP, shared over systems by equipment cost (typed in Systems)':'none, estimate used'],
+    ['Maintenance allowance',c.mntPct/100,'% of SRP over the span (maintenance and repairs)'],['Maintenance span',c.mntYrs,'years; same yearly amount continues after'],
     ['MBT energy',R.M.kwh,'kWh/yr (from simulation, incl. indoor fans)'],[`${CN} energy`,h2h?R.D.kwh:0,'kWh/yr (from simulation, incl. indoor fans)'],
     ['MBT demand charges',R.M.demYr,'PHP/yr'],[`${CN} demand charges`,h2h?R.D.demYr:0,'PHP/yr'],['Grid emission factor',c.ef,'tCO2/MWh'],
-    ['MBT equipment total',null,'PHP, from Systems'],['MBT installation total',null,'PHP, from Systems'],[`${CN} equipment total`,null,'PHP, from Systems'],[`${CN} installation total`,null,'PHP, from Systems']];
+    ['MBT equipment total',null,'PHP, from Systems'],['MBT installation total',null,'PHP, from Systems'],[`${CN} equipment total`,null,'PHP, from Systems'],[`${CN} installation total`,null,'PHP, from Systems'],['MBT equipment at SRP',R.M.srp,'PHP, before end-user discount'],[`${CN} equipment at SRP`,h2h?R.D.srp:0,'PHP']];
   const wsI=XLSX.utils.aoa_to_sheet(inp);
   const sp=(col)=>`SUMPRODUCT(Systems!$C$${r1}:$C$${rn},Systems!$${col}$${r1}:$${col}$${rn})`;
   wsI.B19={t:'n',f:sp('F'),z:'#,##0'};wsI.B20={t:'n',f:sp('G'),z:'#,##0'};wsI.B21={t:'n',f:sp('J'),z:'#,##0'};wsI.B22={t:'n',f:sp('K'),z:'#,##0'};
-  ['B3','B4','B10','B13'].forEach(k=>{if(wsI[k])wsI[k].z='0.0%'});wsI.B2.z='0.00';['B8','B9','B11','B12','B14','B15','B16','B17'].forEach(k=>{if(wsI[k])wsI[k].z='#,##0'});
+  ['B3','B4','B10','B12'].forEach(k=>{if(wsI[k])wsI[k].z='0.0%'});wsI.B2.z='0.00';['B8','B9','B11','B14','B15','B16','B17','B23','B24'].forEach(k=>{if(wsI[k])wsI[k].z='#,##0'});
   wsI['!cols']=[{wch:30},{wch:16},{wch:40}];
   // Cash flow
   const I=k=>`Inputs!$B$${k}`;
-  const head=['Year','Discount factor','MBT capex','MBT energy','MBT maint. + repair','MBT present value','MBT cumulative PV'];
-  if(h2h)head.push(`${cn} capex`,`${cn} energy`,`${cn} maint. + repair`,`${cn} present value`,`${cn} cumulative PV`);
+  const head=['Year','Discount factor','MBT capex','MBT energy','MBT maintenance','MBT present value','MBT cumulative PV'];
+  if(h2h)head.push(`${cn} capex`,`${cn} energy`,`${cn} maintenance`,`${cn} present value`,`${cn} cumulative PV`);
   const cf=[head];for(let t=0;t<=N;t++)cf.push([t]);
   const wsC=XLSX.utils.aoa_to_sheet(cf);
-  const side=(cols,eq,ins,kwh,dem)=>{const [C,E,M,PV,CUM]=cols;
+  const side=(cols,eq,ins,kwh,dem,srp)=>{const [C,E,M,PV,CUM]=cols;
     for(let t=0;t<=N;t++){const r=t+2;
       wsC[`${C}${r}`]={t:'n',f:`IF(A${r}=0,${eq}+${ins},0)`,z:'#,##0'};
       wsC[`${E}${r}`]={t:'n',f:`IF(A${r}=0,0,(${kwh}*${I(2)}+${dem})*(1+${I(3)})^(A${r}-1))`,z:'#,##0'};
-      wsC[`${M}${r}`]={t:'n',f:`IF(A${r}=0,0,(${I(12)}*${I(7)}+${I(13)}*${eq})*(1+${I(3)})^(A${r}-1))`,z:'#,##0'};
+      wsC[`${M}${r}`]={t:'n',f:`IF(A${r}=0,0,${srp}*${I(12)}/${I(13)})`,z:'#,##0'};
       wsC[`${PV}${r}`]={t:'n',f:`(${C}${r}+${E}${r}+${M}${r})*B${r}`,z:'#,##0'};
       wsC[`${CUM}${r}`]={t:'n',f:t===0?`${PV}${r}`:`${CUM}${r-1}+${PV}${r}`,z:'#,##0'};}};
   for(let t=0;t<=N;t++){const r=t+2;wsC[`B${r}`]={t:'n',f:`1/(1+${I(4)})^A${r}`,z:'0.0000'}}
-  side(['C','D','E','F','G'],I(19),I(20),I(14),I(16));
-  if(h2h)side(['H','I','J','K','L'],I(21),I(22),I(15),I(17));
+  side(['C','D','E','F','G'],I(19),I(20),I(14),I(16),I(23));
+  if(h2h)side(['H','I','J','K','L'],I(21),I(22),I(15),I(17),I(24));
   const last=N+2,rr=N+4;
   wsC[`A${rr}`]={t:'s',v:'Total cost of ownership (PV, less residual value)'};
   wsC[`F${rr}`]={t:'n',f:`SUM(F2:F${last})-IF(${I(5)}<${I(6)},C2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,z:'#,##0'};
@@ -1385,7 +1390,7 @@ async function exportPdf(){
   [['Upfront',[43,61,85]],['Energy (present value)',BLUE],['Maintenance and repair',[127,178,224]]].forEach(([t,col],i)=>{const x=L+lw+i*42;doc.setFillColor(...col);doc.rect(x,y,3,3,'F');text(t,x+5,y+2.8,{s:8,c:MUT})});y+=8;
   doc.autoTable({startY:y,margin:{left:L,right:L},styles:{fontSize:8.5,cellPadding:1.8},headStyles:{fillColor:BLUE},
     head:[['PHP, present value','MBT VC Max',...(h2h?[cn]:[])]],
-    body:[['Equipment',PHPf(R.M.equip),...(h2h?[PHPf(R.D.equip)]:[])],['Installation',PHPf(R.M.inst),...(h2h?[PHPf(R.D.inst)]:[])],['Energy',PHPf(R.M.pvE),...(h2h?[PHPf(R.D.pvE)]:[])],['Maintenance',PHPf(R.M.pvM),...(h2h?[PHPf(R.D.pvM)]:[])],['Repairs',PHPf(R.M.pvR),...(h2h?[PHPf(R.D.pvR)]:[])],...(R.M.resid>0?[['Less residual value','-'+PHPf(R.M.resid),...(h2h?['-'+PHPf(R.D.resid)]:[])]]:[]),['Total cost of ownership',PHPf(R.M.tco),...(h2h?[PHPf(R.D.tco)]:[])]],
+    body:[['Equipment',PHPf(R.M.equip),...(h2h?[PHPf(R.D.equip)]:[])],['Installation',PHPf(R.M.inst),...(h2h?[PHPf(R.D.inst)]:[])],['Energy',PHPf(R.M.pvE),...(h2h?[PHPf(R.D.pvE)]:[])],['Maintenance and repairs',PHPf(R.M.pvM),...(h2h?[PHPf(R.D.pvM)]:[])],...(R.M.resid>0?[['Less residual value','-'+PHPf(R.M.resid),...(h2h?['-'+PHPf(R.D.resid)]:[])]]:[]),['Total cost of ownership',PHPf(R.M.tco),...(h2h?[PHPf(R.D.tco)]:[])]],
     columnStyles:{1:{halign:'right'},2:{halign:'right'}},didParseCell:d=>{if(d.row.index===d.table.body.length-1&&d.section==='body')d.cell.styles.fontStyle='bold'}});
   y=doc.lastAutoTable.finalY+6;
   // systems
@@ -1694,7 +1699,7 @@ const newSid=()=>'s'+Date.now().toString(36)+Math.random().toString(36).slice(2,
 const LK=k=>k+':'+(ME?ME.id:'anon');
 function setSaved(t,ic){const e=$('#savedTxt');if(e)e.textContent=t;const i=document.querySelector('.saved .ms');if(i)i.textContent=ic||'cloud_done'}
 function markSynced(){lastKey=stKey();try{localStorage.setItem(LK('mbt-tco-synced'),lastKey)}catch(e){}}
-function normS(){S.costs={...DEF.costs,...S.costs};S.costs.tier=2;S.project={...DEF.project,...S.project};S.wi=S.wi||{tariff:0,hours:0,priceD:0};S.view='wizard';S.step=S.step||0}
+function normS(){const old=!(S.costs&&S.costs.v16);S.costs={...DEF.costs,...S.costs};if(old){S.costs.instPct=35;S.costs.v16=1}S.costs.tier=2;S.project={...DEF.project,...S.project};S.wi=S.wi||{tariff:0,hours:0,priceD:0};S.view='wizard';S.step=S.step||0}
 const canTeam=()=>!!(DB&&ME);
 function studyRow(){
   let result=null,hp=null;
@@ -1921,7 +1926,7 @@ document.addEventListener('change',e=>{
   if(D.stwho){ST.who=t.value;paintStudies();return}
   if(D.lp){const v=parseFloat(t.value.replace(/[^\d.]/g,''));if(!isNaN(v))t.value=num(Math.round(v))}
   if(D.ci){render();return}
-  if(D.c==='euDisc'||D.c==='instPct'||D.c==='priceM'||D.c==='priceD'){render();return}
+  if(D.c==='euDisc'||D.c==='instPct'||D.c==='priceM'||D.c==='priceD'||D.c==='mntPct'||D.c==='mntYrs'){render();return}
   if(D.cs){S.costs[D.cs]=+t.value;save()}
   if(D.cstr){S.costs[D.cstr]=t.value;save()}
   if(D.cb){S.costs[D.cb]=t.checked;if(t.checked)S.costs.tier=2;render()}
