@@ -502,6 +502,12 @@ tbody tr:hover td{background:color-mix(in srgb,var(--fill-2) 60%,transparent)}
 @media (max-width:560px){.ph h1{font-size:26px}.kpi .v{font-size:28px}.kpi.hero .v{font-size:32px}.card-b{padding:16px}.card-h{padding:14px 16px}}
 .who .wname{white-space:nowrap}.mark{font-size:10px}
 .top .btn.ghost{color:var(--ink-2)}.top .btn.ghost:hover{background:var(--fill-2)}.top .btn.ghost[aria-pressed="true"]{color:var(--accent);background:var(--accent-soft)}
+.feat{border:1px solid var(--line-2);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.feat.on{background:color-mix(in srgb,var(--accent-soft) 35%,var(--surface))}
+.feat .check b{display:block;font-size:13.5px;color:var(--ink)}.feat .check small{display:block;color:var(--muted);font-size:12.5px;line-height:1.45;margin-top:2px}
+.feat .fin{margin-left:26px}.fnote{display:flex;gap:8px;align-items:flex-start;margin-left:26px;font-size:12px;color:var(--muted);line-height:1.45}.fnote .ms{font-size:16px;color:var(--muted)}
+.fnote.warn{color:var(--warn)}.fnote.warn .ms{color:var(--warn)}
+@media (max-width:560px){.feat .fin,.fnote{margin-left:0}}
 </style>
 <header class="top">
   <div class="top-in">
@@ -566,7 +572,7 @@ const TEMPLATE='System,Tag,Description,Brand,Model,Capacity_HP,Capacity_kW,Qty,R
 const DEF={
   step:0,view:'wizard',
   project:{client:'Sample client (example)',name:'Sample Office Tower',city:'Metro Manila',type:'office',mode:'h2h',years:15,compId:DAIKIN.id},
-  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:35,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null,euDisc:0,mntPct:25,mntYrs:10,v16:1},
+  costs:{hpd:10,dpw:6,start:8,load:'normal',tariff:14.74,esc:3,disc:8,priceM:60000,priceD:66000,instPct:35,modCost:40000,pm:1200,rep:1,life:15,ef:0.7,tier:2,base:30,estMbt:false,wb:19,cd:0.25,pattern:'type',fanW:10,dem:0,wx:'typ',site:'open',cInstM:null,cInstD:null,cInstSrc:null,euDisc:0,mntPct:25,mntYrs:10,v16:1,sbM:3.5,sbD:30,rsOn:false,rsRatio:130,divPct:80,ductOn:false,metaOn:false,metaPct:10,acFanOn:false,dlOn:false,dlPct:80,pmOn:false,pmPct:20,gwCost:0,lifeOn:false,lifeYrs:18},
   wi:{tariff:0,hours:0,priceD:0},
   boq:null
 };
@@ -863,9 +869,9 @@ function perfAt(m,r,T){ // part-load read against the capacity each row actually
   return{tc:q,pi:A.pi+f*(B.pi-A.pi),rmin:lo.tc/c100};
 }
 function cap100(m,T){const g=m._g;const i=g.ratios.indexOf(100);if(i>=0)return atT(g,g.tc,i,T);return Math.max(...g.ratios.map((v,j)=>v<=100?atT(g,g.tc,j,T):0))}
-function simulate(models,Qd,bins){ // models share the load by rated kW
+function simulate(models,Qd,bins,offOv){ // models share the load by rated kW; Qd = building design load (kW)
   models.forEach(prepModel);
-  const tot=models.reduce((s,m)=>s+m.kw,0),Cd=clamp(S.costs.cd||0,0,1),off=siteOff();let kwh=0,cool=0,short=0,cyc=0,peak=0;const per=[];
+  const tot=models.reduce((s,m)=>s+m.kw,0),Cd=clamp(S.costs.cd||0,0,1),off=offOv!=null?offOv:siteOff();let kwh=0,cool=0,short=0,cyc=0,peak=0;const per=[];
   for(const b of bins){const Q=plr(b.T,b.hr)*Qd,Tc=b.T+off;let pw=0,del=0;
     for(const m of models){const q=Q*m.kw/tot,c100=cap100(m,Tc);let qd=q;if(q>c100*1.001){qd=c100;short+=b.h/models.length}
       const r=qd/c100,p=perfAt(m,r,Tc);let pwr=p.pi*(qd/p.tc);
@@ -920,15 +926,21 @@ function tier2State(){
 /* ---------- engine ---------- */
 function linePrice(x,k,pD){ // per unit, pesos. Blank override = default rule
   const c=S.costs,l=x.l,fw=k==='m'?1:(pD/c.priceD||1);
-  const ov=k==='m'?l.pM:l.pC,io=k==='m'?l.iM:l.iC;
+  let ov=k==='m'?l.pM:l.pC;const io=k==='m'?l.iM:l.iC;if(k==='m'&&x.rs)ov=srpOfModel(x.m);
   const cab=k==='m'?x.m.mods:(x.cm?x.cm.list.reduce((s,y)=>s+(y.mods||1),0):1);
   const dk=k==='m'?1-(c.euDisc||0)/100:1; // end-user discount applies to MBT SRP prices (quotation and price per HP), not to prices typed per system
   const al=k==='m'?allocM(x.m)*dk:0,ct=k==='m'?c.cInstM:c.cInstD;
-  const eq=(ov!=null?ov*fw*(k==='m'&&l.priceSrc==='Quote'?dk:1):x.m.hp*(k==='m'?c.priceM*dk:pD))+al;
-  const srp=(ov!=null?ov*fw:x.m.hp*(k==='m'?c.priceM:pD))+(k==='m'?allocM(x.m):0); // equipment at SRP, before any end-user discount
+  const hpK=k==='m'?x.m.hp:(x.hpC||x.m.hp);
+  const eq=(ov!=null?ov*fw*(k==='m'&&(l.priceSrc==='Quote'||x.rs)?dk:1):hpK*(k==='m'?c.priceM*dk:pD))+al;
+  const srp=(ov!=null?ov*fw:hpK*(k==='m'?c.priceM:pD))+(k==='m'?allocM(x.m):0); // equipment at SRP, before any end-user discount
   const inst=io!=null&&ct==null?io*fw:srp*c.instPct/100; // installation allowance = % of SRP; a contractor total replaces this in compute()
   return{eq,srp,inst,cab,al,eqOv:ov!=null||al>0,inOv:io!=null||ct!=null||Math.abs(srp-eq)>.5,ct};
 }
+function rightSize(m,need){ // smallest VC Max size that covers 'need' kW (never larger than the BOQ size)
+  const c=MIDEA.filter(x=>x.kw>=need-1e-6&&x.kw<=m.kw).sort((a,b)=>a.kw-b.kw)[0];return c||m;
+}
+function catSrp(model){if(typeof CATALOG==='undefined'||!CATALOG)return null;const k=normM(model),h=CATALOG.find(c=>c.key===k);return h?h.srp:null}
+function srpOfModel(m){const a=catSrp(m.model);if(a)return a;const hs=modsOf(m);let t=0;for(const h of hs){const u=mByHp(h),v=u?catSrp(u.model):null;if(!v)return null;t+=v}return t||null}
 function compute(){
   const c=S.costs,w=S.wi,N=S.project.years,d=c.disc/100,e=c.esc/100,h2h=S.project.mode==='h2h';
   const T=c.tariff*(1+w.tariff/100);const LF=LOAD[c.load];const pD=c.priceD*(1+w.priceD/100);
@@ -939,15 +951,22 @@ function compute(){
   const cb=h2h?compBrand():null;const shapeBrand=h2h?cb:BRANDS[DAIKIN.id];
   const odus=(S.boq&&S.boq.lines||[]).filter(l=>l.kind==='odu'&&l.mHp);
   const sys=odus.map(l=>{
-    const m=mByHp(l.mHp);const q=l.qty;const cm=h2h?matchComp(cb,m.kw):null;
-    const x={l,m,q,cm,hp:m.hp*q,modsM:m.mods*q,modsD:cm?cm.list.reduce((s,y)=>s+(y.mods||1),0)*q:0};
+    const md=mByHp(l.mHp);const q=l.qty;
+    // Right-sizing (optional): the building's simultaneous peak is divPct of the BOQ capacity; each brand is sized to cover that peak
+    // within its connection-ratio limit (VC Max up to rsRatio, up to 200% special order; competitor up to 130%).
+    const div=c.rsOn?Math.min(1,(c.divPct||100)/100):1,ratio=Math.max(100,Math.min(200,c.rsRatio||130))/100,Ld=md.kw*div; // Ld = design load served
+    const m=c.rsOn?rightSize(md,Math.max(Ld,md.kw/ratio)):md,rs=m!==md;
+    const tgtC=c.rsOn?Math.max(Ld,md.kw/Math.min(ratio,1.3)):md.kw;
+    const offM=c.ductOn&&siteOff()?0:null;
+    const cm=h2h?matchComp(cb,tgtC):null,hpC=md.hp*tgtC/md.kw;
+    const x={l,m,md,rs,load:Ld,hpC,q,cm,hp:m.hp*q,modsM:m.mods*q,modsD:cm?cm.list.reduce((s,y)=>s+(y.mods||1),0)*q:0};
     if(tier===1){
-      x.eerM=m.eer;x.kwhM=m.kw*H*LF/m.eer*q;x.peakM=m.kw/m.eer*q;
-      if(cm){x.eerC=cm.eer;x.kwhC=m.kw*H*LF/cm.eer*q;x.peakC=m.kw/cm.eer*q}
+      x.eerM=m.eer;x.kwhM=Ld*H*LF/m.eer*q;x.peakM=Ld/m.eer*q;
+      if(cm){x.eerC=cm.eer;x.kwhC=Ld*H*LF/cm.eer*q;x.peakC=Ld/cm.eer*q}
     }else{
-      const simC=cm?simulate(cm.list,m.kw,bins):null;
+      const simC=cm?simulate(cm.list,Ld,bins):null;
       let simM;
-      if(t2.mbtSrc==='data'){let list;if(t2.mp.builtin){list=modsOf(m).map(h=>t2.mp.models.find(y=>y.hp===h)).filter(Boolean)}if(!list||!list.length)list=matchComp(t2.mp,m.kw).list;simM=simulate(list,m.kw,bins);x.mbtPlModel=list.map(y=>y.name).join(' + ')}
+      if(t2.mbtSrc==='data'){let list;if(t2.mp.builtin){list=modsOf(m).map(h=>t2.mp.models.find(y=>y.hp===h)).filter(Boolean)}if(!list||!list.length)list=matchComp(t2.mp,m.kw).list;simM=simulate(list,Ld,bins,offM);x.mbtPlModel=list.map(y=>y.name).join(' + ')}
       x.eerM=simM.seer;x.kwhM=simM.kwh*q;x.shortM=simM.short;x.cycM=simM.cyc;x.peakM=simM.peak*q;
       simM.per.forEach(p=>{const o=perBin[p.T];o.cool+=p.cool*q;o.em+=p.e*q});
       if(simC){x.eerC=simC.seer;x.kwhC=simC.kwh*q;x.shortC=simC.short;x.cycC=simC.cyc;x.peakC=simC.peak*q;simC.per.forEach(p=>{perBin[p.T].ec+=p.e*q})}
@@ -957,17 +976,24 @@ function compute(){
   const hp=sys.reduce((s,x)=>s+x.hp,0);
   const iduKW=(S.boq&&S.boq.lines||[]).filter(l=>l.kind==='idu').reduce((s,l)=>s+(l.kw||(l.hp?l.hp*2.8:0))*l.qty,0);
   const fanKW=iduKW*(c.fanW||0)/1000,fanKwh=fanKW*H;
+  const idle=Math.max(0,8760-H);
   const side=k=>{
-    const kwhOdu=sys.reduce((s,x)=>s+(k==='m'?x.kwhM:(x.kwhC||0)),0),kwh=kwhOdu+fanKwh;
-    const peak=sys.reduce((s,x)=>s+(k==='m'?x.peakM:(x.peakC||0)),0)+fanKW,demYr=peak*(c.dem||0)*12*(1+w.tariff/100);
-    const mods=sys.reduce((s,x)=>s+(k==='m'?x.modsM:x.modsD),0);
+    const m_=k==='m',rawOdu=sys.reduce((s,x)=>s+(m_?x.kwhM:(x.kwhC||0)),0);
+    const metaSave=m_&&c.metaOn?rawOdu*(c.metaPct||0)/100:0,kwhOdu=rawOdu-metaSave; // optional META 2.0 credit on outdoor-unit cooling energy
+    const fanF=!m_&&c.acFanOn?1/0.8:1,fanK=fanKwh*fanF; // optional: competitor indoor units on AC fan motors (VC Max full DC up to 20% better)
+    const mods=sys.reduce((s,x)=>s+(m_?x.modsM:x.modsD),0);
+    const sbW=m_?(c.sbM??3.5):(c.sbD??30),kwhSB=sbW*mods*idle/1000; // built in: outdoor-unit standby power when the system is off
+    const kwh=kwhOdu+fanK+kwhSB;
+    const peakRaw=sys.reduce((s,x)=>s+(m_?x.peakM:(x.peakC||0)),0)+fanKW*fanF,peak=m_&&c.dlOn?peakRaw*(c.dlPct||100)/100:peakRaw,demYr=peak*(c.dem||0)*12*(1+w.tariff/100);
     let equip=0,inst=0,srp=0;const prs=sys.map(x=>linePrice(x,k,pD));prs.forEach((pr,i)=>{equip+=pr.eq*sys[i].q;srp+=pr.srp*sys[i].q});
+    const gw=m_&&c.pmOn?(c.gwCost||0):0;
     const ct=k==='m'?c.cInstM:c.cInstD;
-    sys.forEach((x,i)=>{const pr=prs[i];if(ct!=null)pr.inst=equip?ct*pr.eq/equip:0;if(k==='m'){x.eqM=pr.eq;x.inM=pr.inst}else{x.eqD=pr.eq;x.inD=pr.inst}inst+=pr.inst*x.q});const capex=equip+inst;
-    const mnt=srp*(c.mntPct||0)/100/Math.max(1,c.mntYrs||10),pm=mnt,rep=0;let pvE=0,pvM=0,pvR=0;const cum=[capex]; // maintenance allowance: % of SRP spread evenly over the span, same yearly amount after
+    sys.forEach((x,i)=>{const pr=prs[i];if(ct!=null)pr.inst=equip?ct*pr.eq/equip:0;if(k==='m'){x.eqM=pr.eq;x.inM=pr.inst}else{x.eqD=pr.eq;x.inD=pr.inst}inst+=pr.inst*x.q});const capex=equip+inst+gw;
+    const mnt=srp*(m_&&c.pmOn?(c.pmPct??c.mntPct):(c.mntPct||0))/100/Math.max(1,c.mntYrs||10),pm=mnt,rep=0;let pvE=0,pvM=0,pvR=0;const cum=[capex]; // maintenance allowance: % of SRP spread evenly over the span, same yearly amount after
     for(let t=1;t<=N;t++){const df=1/Math.pow(1+d,t),g=Math.pow(1+e,t-1);const Et=(kwh*T+demYr)*g*df,Mt=mnt*df;pvE+=Et;pvM+=Mt;cum.push(cum[t-1]+Et+Mt)}
-    const resid=N<c.life?capex*(c.life-N)/c.life/Math.pow(1+d,N):0;cum[N]-=resid;
-    return{kwh,kwhOdu,peak,demYr,mods,equip,srp,mnt,inst,capex,pvE,pvM,pvR,resid,tco:capex+pvE+pvM+pvR-resid,cum,yr1:kwh*T+demYr+pm+rep};
+    const life=m_&&c.lifeOn?(c.lifeYrs||c.life):c.life;
+    const resid=N<life?capex*(life-N)/life/Math.pow(1+d,N):0;cum[N]-=resid;
+    return{kwh,kwhOdu,kwhSB,metaSave,fanK,life,gw,peakRaw,peak,demYr,mods,equip,srp,mnt,inst,capex,pvE,pvM,pvR,resid,tco:capex+pvE+pvM+pvR-resid,cum,yr1:kwh*T+demYr+pm+rep};
   };
   const M=side('m'),D=side('d');
   let cross=null;for(let t=0;t<=N;t++)if(M.cum[t]<=D.cum[t]){cross=t;break}
@@ -1081,6 +1107,60 @@ function numF(id,label,key,pre,suf,help,ex,step){
   return`<div class="f"><label for="${id}">${label}${help?tip(help):''}${ex?' <span class="chip ex">Example</span>':''}</label>
    <div class="affix">${pre?`<span>${pre}</span>`:''}<input id="${id}" type="number" inputmode="decimal" step="${step||'any'}" data-c="${key}" value="${S.costs[key]}">${suf?`<span>${suf}</span>`:''}</div></div>`;
 }
+/* ---------- VC Max features: built-in advantages and optional credits ---------- */
+const isDaikin=()=>{const b=compBrand();return S.project.mode==='h2h'&&b&&/daikin/i.test(brandName(b))};
+function featNote(t,cancel){return`<div class="fnote${cancel?' warn':''}"><span class="ms" aria-hidden="true">${cancel?'balance':'info'}</span><span>${t}</span></div>`}
+function featRow(key,title,desc,inputs,note,cancel){
+  const on=!!S.costs[key];
+  return`<div class="feat${on?' on':''}"><label class="check"><input type="checkbox" data-cb="${key}" ${on?'checked':''}><span><b>${title}</b><small>${desc}</small></span></label>
+   ${on&&inputs?`<div class="grid2 fin">${inputs}</div>`:''}${featNote(note,cancel&&on)}</div>`;
+}
+function vFeatures(){
+  const c=S.costs,h2h=S.project.mode==='h2h',cb=compBrand(),cn=h2h&&cb?esc(cb.name):'the competitor',dk=isDaikin();let R=null;try{R=compute()}catch(e){}
+  const sbSave=R&&h2h?(R.D.kwhSB-R.M.kwhSB):0,rsN=R?R.sys.filter(x=>x.rs).length:0,rsShort=R?R.sys.reduce((s,x)=>s+(x.rs?(x.shortM||0):0),0):0;
+  return`<section class="card"><div class="card-h"><span class="ms" aria-hidden="true">verified</span><h2>VC Max features</h2><div class="r"><span class="chip">Built in, plus optional credits</span></div></div>
+  <div class="card-b stack">
+   <div class="sub-h" style="margin:0">Counted in every study</div>
+   <div class="feat on"><div class="check"><span class="ms" aria-hidden="true" style="color:var(--good)">check_circle</span><span><b>Low standby power</b><small>VC Max outdoor units draw 3.5 W when the system is off (Midea catalog); conventional VRF about 30 W. Counted for ${R?num(Math.round(Math.max(0,8760-R.H))):'the'} idle hours a year.${h2h&&R?` Saves <b>${num(Math.round(sbSave))} kWh</b> (${pesoFull(sbSave*R.T)}) a year.`:''}</small></span></div>
+    ${h2h?`<div class="grid2 fin">${numF('c-sbd',`${cn} standby power per outdoor unit`,'sbD','','W','Midea\'s catalog compares with 30 W for conventional VRF. Enter the competitor\'s own figure if you have it.',0,.5)}</div>`:''}</div>
+   <div class="feat on"><div class="check"><span class="ms" aria-hidden="true" style="color:var(--good)">check_circle</span><span><b>Rated to 55°C outdoors</b><small>VC Max performance data runs to 55°C; ${h2h?cn+' is held at its highest published temperature on hotter hours':'used on the hottest hours'}. Already part of the hour-by-hour simulation.</small></span></div></div>
+   <div class="sub-h" style="margin:6px 0 0">Optional credits <span class="muted" style="font-weight:400">· off by default, listed on the report when used</span></div>
+   ${featRow('rsOn','Right-size outdoor units (wide connection ratio)','When the building\'s real peak is below the BOQ capacity, size each brand to that peak within its connection-ratio limit: VC Max up to the ratio you set (200% by special order), the competitor up to 130%. Smaller units cost less and run at higher load, where VC Max is strongest.',
+     numF('c-div','Building peak load','divPct','','% of BOQ outdoor capacity','The simultaneous peak the building actually needs, as a share of the outdoor capacity in the BOQ. Both brands are simulated on this load. Designers often connect indoor units at 100%, while real peaks are lower because rooms do not peak together.',0,5)+numF('c-rsr','VC Max connection ratio','rsRatio','','% of outdoor capacity','Standard VC Max limit is 130%; up to 200% is a special order. Check the building\'s peak simultaneous load before going above 130%.',0,5)+`<div class="f"><span class="lbl">Effect</span><small class="help">${rsN?`${rsN} system${rsN>1?'s':''} downsized${rsShort>0?`; <b style="color:var(--warn)">${num(Math.round(rsShort))} hours</b> a year need more than the smaller units can give`:'; no shortfall hours'}.`:'No system can go down a size at this ratio.'}</small></div>`,
+     `${dk?'Daikin VRV also allows up to 130% connection, so up to 130% both brands can downsize. ':'Most VRF brands allow up to 130%. '}Only the range above 130% (special order) is unique to VC Max.`,c.rsRatio<=130)}
+   ${featRow('ductOn','Ducted outdoor units with high static fan','On enclosed or crowded sites, the VC Max outdoor fan (up to 120 Pa, special order) can duct hot air away, so VC Max is simulated without the +3°C penalty.','',
+     `${c.site!=='enclosed'?'Has no effect: the site is set to open roof or ground. ':''}Other brands also offer high-static outdoor fans on many models; check the competitor model before using this.`,true)}
+   ${featRow('metaOn','META 2.0 energy credit','Reduces VC Max outdoor-unit cooling energy by this %. Midea claims more than 28% but publishes no test basis; independent studies of variable evaporating temperature show 12.6% (Cao et al., 2024) and 14% a year in an office (Yun et al., 2016).',
+     numF('c-meta','Credit','metaPct','','% of outdoor-unit energy','Keep at 10–12% unless the MBT PM provides a test report. If the data-book part-load tables were measured with META on, the benefit is already in the numbers.',0,1),
+     `${dk?'<b>Cancels out against Daikin:</b> Daikin VRV has VRT (variable refrigerant temperature), the same kind of control, listed as "VRT Smart Control" on VRV A. ':''}Use only against brands without variable refrigerant temperature control.`,dk)}
+   ${featRow('acFanOn',`${h2h?cn:'Competitor'} indoor units use AC fan motors`,'VC Max indoor fans, drain pumps and boards run on DC, up to 20% more efficient. Raises the competitor\'s indoor fan energy by 25%.','',
+     `${dk?'<b>Cancels out against Daikin:</b> Daikin VRV indoor units also use DC fan motors. ':''}Use only when the competitor's indoor units have AC motors.`,dk)}
+   ${featRow('dlOn','Demand limit (60-step capacity control)','Caps VC Max peak power at this % to lower monthly demand charges. Output can be set from 40% to 100% in 1% steps.',
+     numF('c-dlp','Peak cap','dlPct','','% of peak kW','The cap trades some cooling on the hottest hours for a lower demand charge.',0,5)+`<div class="f"><span class="lbl">Effect</span><small class="help">${(c.dem||0)>0?`Saves about ${R?pesoFull((R.M.peakRaw-R.M.peak)*c.dem*12):'-'} a year in demand charges.`:'<b style="color:var(--warn)">No demand charge is set</b> (Engineering settings), so this has no effect.'}</small></div>`,
+     `${dk?'Daikin VRV also offers demand control through an optional adaptor. ':'Many VRF brands offer demand limiting through an adaptor. '}Claim it only if the competitor's quote does not include it.`,true)}
+   ${featRow('pmOn','Predictive maintenance (Doctor M 2.0, cloud alerts, SuperSense)','Lowers the VC Max maintenance allowance. Needs the data cloud gateway, sold separately; its cost is added to MBT upfront cost.',
+     numF('c-pmp','VC Max maintenance allowance','pmPct','','% of SRP over the span','Instead of the rate above, for VC Max only.',0,1)+numF('c-gw','Data cloud gateway cost','gwCost','₱','total','From the MBT price list or quotation.',0,100),
+     'Other brands also sell cloud monitoring (for example Daikin Cloud Service), so the advantage may be small. The catalog gives no measured maintenance saving.',true)}
+   ${featRow('lifeOn','Longer service life (anti-corrosion, backups, duty cycling)','Uses a longer VC Max service life, which raises its residual value at the end of the study.',
+     numF('c-life','VC Max service life','lifeYrs','','years','Competitor stays at 15 years. Best for coastal or harsh sites specified with the heavy anti-corrosion option (UL-certified to 27 years of simulated salt corrosion).',0,1),
+     'Other brands also offer anti-corrosion treatment. Use only when VC Max is specified with the heavy anti-corrosion option and the competitor is not.',true)}
+  </div></section>`;
+}
+function featHtml(R){
+  const c=S.costs,h2h=S.project.mode==='h2h',rows=[],T=R.T;
+  if(h2h)rows.push(['Low standby power (built in)',`${num(Math.round(R.D.kwhSB-R.M.kwhSB))} kWh a year`,(R.D.kwhSB-R.M.kwhSB)*T]);
+  if(c.rsOn){const n=R.sys.filter(x=>x.rs).length;rows.push(['Right-sized outdoor units',`${n} system${n===1?'':'s'} at ${c.rsRatio}% connection`,null])}
+  if(c.ductOn&&c.site==='enclosed')rows.push(['Ducted outdoor units','Simulated without the +3°C enclosed penalty',null]);
+  if(c.metaOn)rows.push([`META 2.0 credit (${c.metaPct}%)`,`${num(Math.round(R.M.metaSave))} kWh a year`,R.M.metaSave*T]);
+  if(c.acFanOn&&h2h)rows.push(['Competitor AC fan motors',`${num(Math.round(R.D.fanK-R.fanKwh))} kWh a year more for the competitor`,(R.D.fanK-R.fanKwh)*T]);
+  if(c.dlOn)rows.push([`Demand limit (${c.dlPct}%)`,(c.dem||0)>0?'Lower demand charges':'No demand charge set',(R.M.peakRaw-R.M.peak)*(c.dem||0)*12]);
+  if(c.pmOn)rows.push([`Predictive maintenance (${c.pmPct}% of SRP)`,`Gateway ${pesoFull(c.gwCost||0)} upfront`,null]);
+  if(c.lifeOn)rows.push([`Service life ${c.lifeYrs} years`,`Residual value ${pesoFull(R.M.resid)} (present value)`,null]);
+  return`<section class="card"><div class="card-h"><span class="ms" aria-hidden="true">verified</span><h2>VC Max features in this study</h2><div class="r"><button class="btn sm ghost" data-go="3">Change</button></div></div>
+   <div class="tw"><table><thead><tr><th>Feature</th><th>Effect</th><th class="n">₱ a year</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td class="n">${r[2]!=null?pesoFull(r[2]):'<span class="muted">in totals</span>'}</td></tr>`).join('')}</tbody></table></div>
+   ${rows.length<2?'<div class="card-b" style="padding-top:8px"><span class="muted" style="font-size:12.5px">Optional credits are off. Turn them on in step 4 under VC Max features.</span></div>':''}</section>`;
+}
+
 function mntNote(){
   const c=S.costs;let R=null;try{R=compute()}catch(e){}if(!R)return'';const h2h=S.project.mode==='h2h',yr=(c.mntPct/Math.max(1,c.mntYrs)).toFixed(2).replace(/\.?0+$/,'');
   return`<div class="note info" style="grid-column:1/-1"><span class="ms" aria-hidden="true">calendar_month</span><span>${c.mntPct}% of SRP over ${c.mntYrs} years = ${yr}% of SRP a year: <b>${pesoFull(R.M.mnt)}</b> a year for MBT${h2h?` and <b>${pesoFull(R.D.mnt)}</b> for ${esc(brandName(compBrand()))}`:''}.</span></div>`;
@@ -1101,7 +1181,7 @@ function priceTable(){
   let R=null;try{R=compute()}catch(e){}
   const cell=(l,f,ph,lbl)=>`<td><div class="affix sm"><span>₱</span><input type="text" inputmode="decimal" data-lp="${l.id}|${f}" value="${l[f]!=null?num(Math.round(l[f])):''}" placeholder="${num(Math.round(ph))}" aria-label="${lbl}"></div></td>`;
   const fixed=v=>`<td><span class="muted" title="Contractor's installation cost, shared by equipment cost">₱${num(Math.round(v||0))}</span></td>`;
-  const rows=L.map(l=>{const m=mByHp(l.mHp),cm=h2h&&cb&&cb.models?matchComp(cb,m.kw):null,x={l,m,cm,q:l.qty};const a=linePrice(x,'m',c.priceD),b=h2h?linePrice(x,'d',c.priceD):null;const rx=R&&R.sys.find(y=>y.l.id===l.id);
+  const rows=L.map(l=>{const md=mByHp(l.mHp),rx0=R?R.sys.find(y=>y.l.id===l.id):null,m=rx0?rx0.m:md,cm=rx0?rx0.cm:(h2h&&cb&&cb.models?matchComp(cb,md.kw):null),x={l,m,md,rs:m!==md,hpC:rx0?rx0.hpC:md.hp,cm,q:l.qty};const a=linePrice(x,'m',c.priceD),b=h2h?linePrice(x,'d',c.priceD):null;const rx=R&&R.sys.find(y=>y.l.id===l.id);
     const tag=l.priceSrc==='BOQ'?' · <span class="chip ok" style="padding:0 6px">From BOQ</span>':l.priceSrc==='Quote'?' · <span class="chip ok" style="padding:0 6px">SRP</span>':'';
     return`<tr><td><div class="cell-m"><b>${esc(l.sys||'System')}</b><small>${m.hp} HP × ${num(l.qty)}${tag}</small></div></td>${cell(l,'pM',a.eq-a.al,'MBT outdoor unit price per unit')}${c.cInstM!=null?fixed(rx&&rx.inM):cell(l,'iM',a.inst,'MBT installation per unit')}${h2h?cell(l,'pC',b.eq,cn(cb)+' equipment per unit')+(c.cInstD!=null?fixed(rx&&rx.inD):cell(l,'iC',b.inst,cn(cb)+' installation per unit')):''}</tr>`}).join('');
   function cn(b){return b?brandName(b):'Competitor'}
@@ -1151,6 +1231,7 @@ function vCosts(){
     ${numF('c-mny','Spread over','mntYrs','','years','The allowance is spent evenly over these years. If the study runs longer, the same yearly amount continues.',0,1)}
     ${mntNote()}
    </div></section>
+  ${vFeatures()}
   <details class="card adv" ${S.advOpen?'open':''}><summary class="card-h"><span class="ms" aria-hidden="true">tune</span><h2>Engineering settings</h2><div class="r"><span class="chip">Optional</span><span class="ms chev" aria-hidden="true">expand_more</span></div></summary>
    <div class="card-b stack">
     ${t2.ok?`<div class="grid3">${numF('c-base','Load at 20°C outdoor','base','','% of design','Base load from people, lights and equipment. Load rises in a straight line to 100% at 35°C outdoor.',0,5)}
@@ -1196,7 +1277,7 @@ function simHtml(R){
   if(R.tier!==2)return'';
   const h2h=S.project.mode==='h2h',cn=R.cb?R.cb.name:'',c=S.costs;
   const cool=R.bins.reduce((s,b)=>s+b.cool,0),em=R.bins.reduce((s,b)=>s+b.em,0),ec=R.bins.reduce((s,b)=>s+b.ec,0);
-  const hrs=R.bins.reduce((s,b)=>s+b.h,0),avg=cool/hrs/R.sys.reduce((s,x)=>s+x.m.kw*x.q,0);
+  const hrs=R.bins.reduce((s,b)=>s+b.h,0),avg=cool/hrs/R.sys.reduce((s,x)=>s+(x.load||x.m.kw)*x.q,0);
   const cyc=k=>{const t=R.sys.reduce((s,x)=>s+(k==='m'?x.cycM:x.cycC||0)*x.q,0),n=R.sys.reduce((s,x)=>s+x.q,0);return Math.round(100*t/n/hrs)};
   const sh=R.sys.reduce((s,x)=>s+Math.max(x.shortM||0,x.shortC||0),0);
   return `<section class="card"><div class="card-h"><span class="ms" aria-hidden="true">thermostat</span><h2>Part-load simulation</h2><div class="r legend"><span><i style="background:var(--line)"></i>Operating hours</span><span><i class="ln" style="background:var(--accent)"></i>MBT EER</span>${h2h?`<span><i class="ln" style="background:var(--rival)"></i>${esc(cn)} EER</span>`:''}</div></div>
@@ -1231,6 +1312,7 @@ function resBody(R){
     <div class="card-b stack">${slider('wi-t','Electricity rate','tariff',wv.tariff)}${slider('wi-h','Operating hours','hours',wv.hours)}${h2h?slider('wi-p',`${esc(R.cb.name)} price`,'priceD',wv.priceD):''}
     <p class="muted" style="margin:0;font-size:12px">Moves the results live without changing your saved inputs.</p></div></section>
   </div>
+  <div id="featBox">${featHtml(R)}</div>
   <div id="simBox">${simHtml(R)}</div>
   <div id="mapBox">${effMapHtml()}</div>
   <section class="card"><div class="card-h"><span class="ms" aria-hidden="true">show_chart</span><h2>Cumulative cost over ${R.N} years</h2><div class="r legend"><span><i class="ln" style="background:var(--accent)"></i>MBT VC Max</span>${h2h?`<span><i class="ln" style="background:var(--rival)"></i>${esc(cn)}</span>`:''}</div></div>
@@ -1311,8 +1393,16 @@ function studyFacts(R){
     ...(h2h?[[`${cn} equipment price`,anyOv('pC')?`System prices; PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP where blank`:`PHP ${nf(c.priceD*(1+S.wi.priceD/100))}/HP`,'Market estimate']]:[]),
     ['Installation',[c.cInstM!=null?`MBT PHP ${nf(c.cInstM)} quoted by the contractor`:'',h2h&&c.cInstD!=null?`${cn} PHP ${nf(c.cInstD)} quoted by the contractor`:''].filter(Boolean).concat((c.cInstM==null||(h2h&&c.cInstD==null))?[`${(anyOv('iM')&&c.cInstM==null)||(anyOv('iC')&&c.cInstD==null)?'system prices, else ':''}${c.instPct}% of SRP${c.cInstM!=null||c.cInstD!=null?' for '+(c.cInstM!=null?cn:'MBT'):''}`]:[]).join('; '),c.cInstM!=null||c.cInstD!=null?'Contractor':'Estimate'],
     ['Maintenance',`${c.mntPct}% of SRP over ${c.mntYrs} years (${(c.mntPct/Math.max(1,c.mntYrs)).toFixed(2).replace(/\.?0+$/,'')}% of SRP a year), preventive maintenance and repairs, same rule for both brands`,'Allocation'],
+    ...(h2h?[['VC Max standby power (built in)',`3.5 W per outdoor unit when off vs ${nf(c.sbD??30,1)} W for ${cn}, over ${nf(Math.max(0,8760-R.H))} idle hours a year`,'Midea VC Max catalog 2026']]:[]),
+    ...(c.rsOn?[['Right-sized VC Max outdoor units (optional)',`Sized for ${c.rsRatio}% connection ratio; ${R.sys.filter(x=>x.rs).length} system(s) downsized. ${c.rsRatio<=130?'Other brands also allow up to 130%.':'Above 130% is a VC Max special order.'}`,'VC Max catalog: 50-130% standard, up to 200% special order']]:[]),
+    ...(c.ductOn&&c.site==='enclosed'?[['Ducted VC Max outdoor units (optional)','High static fan (special order) removes the +3°C enclosed-site penalty for VC Max; other brands may offer the same','VC Max catalog: up to 120 Pa']]:[]),
+    ...(c.metaOn?[['META 2.0 credit (optional)',`${c.metaPct}% less VC Max outdoor-unit energy. Brands with variable refrigerant temperature control (e.g. Daikin VRT) have a similar feature`,'Cao et al. 2024; Yun et al. 2016 (Energy and Buildings)']]:[]),
+    ...(c.acFanOn&&h2h?[['Competitor AC fan motors (optional)',`${cn} indoor fan energy +25% (VC Max full DC up to 20% better)`,'VC Max catalog']]:[]),
+    ...(c.dlOn?[['Demand limit (optional)',`VC Max peak capped at ${c.dlPct}%; other brands may offer demand control through an adaptor`,'VC Max catalog: 40-100% in 1% steps']]:[]),
+    ...(c.pmOn?[['Predictive maintenance (optional)',`VC Max maintenance ${c.pmPct}% of SRP over ${c.mntYrs} years; data cloud gateway PHP ${nf(c.gwCost||0)} added upfront`,'Doctor M 2.0, cloud analytics (VC Max catalog)']]:[]),
+    ...(c.lifeOn?[['VC Max service life (optional)',`${c.lifeYrs} years vs ${c.life||15} for ${h2h?cn:'the standard'}, for residual value`,'Heavy anti-corrosion option, UL 27-year salt corrosion test']]:[]),
     ...(c.dem?[['Demand charge',`PHP ${nf(c.dem)}/kW/month`,'Client tariff']]:[]),
-    ['Indoor fans',`${c.fanW} W per kW of indoor capacity`,'Same for both options'],
+    ['Indoor fans',`${c.fanW} W per kW of indoor capacity`,c.acFanOn&&h2h?`${cn} +25% (AC fan motors)`:'Same for both options'],
     ['Grid emission factor',`${c.ef} tCO2/MWh`,'Approximate, Philippine grid']
   ];
   return{p,c,h2h,cn,energy,assumptions};
@@ -1350,7 +1440,8 @@ async function exportXlsx(){
     ['MBT energy',R.M.kwh,'kWh per year, part-load simulation incl. indoor fans',NUM,0],[`${CN} energy`,h2h?R.D.kwh:0,'kWh per year, part-load simulation incl. indoor fans',NUM,0],
     ['MBT demand charges',R.M.demYr,'₱ per year',PESO,0],[`${CN} demand charges`,h2h?R.D.demYr:0,'₱ per year',PESO,0],['Grid emission factor',c.ef,'tCO₂ per MWh','0.00',1],
     ['MBT equipment total',null,'₱, from Systems',PESO,2],['MBT installation total',null,'₱, from Systems',PESO,2],[`${CN} equipment total`,null,'₱, from Systems',PESO,2],[`${CN} installation total`,null,'₱, from Systems',PESO,2],
-    ['MBT equipment at SRP',R.M.srp,'₱, before end-user discount',PESO,0],[`${CN} equipment at SRP`,h2h?R.D.srp:0,'₱',PESO,0]];
+    ['MBT equipment at SRP',R.M.srp,'₱, before end-user discount',PESO,0],[`${CN} equipment at SRP`,h2h?R.D.srp:0,'₱',PESO,0],
+    ['MBT service life',R.M.life,c.lifeOn?'years (optional credit: longer VC Max life)':'years','0',1],['MBT maintenance allowance',(c.pmOn?c.pmPct:c.mntPct)/100,c.pmOn?'of SRP over the span (optional credit: predictive maintenance)':'of SRP over the span',PCT,1],['Data cloud gateway (MBT)',R.M.gw,c.pmOn?'₱ upfront (predictive maintenance)':'₱, not used','₱#,##0',1]];
   const sp=(col,res)=>f(`SUMPRODUCT(Systems!$C$${r1}:$C$${rn},Systems!$${col}$${r1}:$${col}$${rn})`,res);
   const tot={19:sp('F',R.M.equip),20:sp('G',R.M.inst),21:sp('J',h2h?R.D.equip:0),22:sp('K',h2h?R.D.inst:0)};
   inp.forEach(([l,v,u,z,kind],i)=>{const r=i+2,row=wsI.getRow(r);row.getCell(1).value=l;row.getCell(2).value=tot[r]||v;row.getCell(3).value=u;row.height=18;
@@ -1370,7 +1461,7 @@ async function exportXlsx(){
     const vals=[x.l.sys||'System',x.m.hp,x.q,x.m.model,x.m.mods,
       a.eqOv?Math.round(x.eqM):f(`B${r}*Inputs!$B$8`,x.eqM),a.inOv?Math.round(x.inM):f(`F${r}*Inputs!$B$10`,x.inM),
       h2h&&x.cm?x.cm.list.map(y=>y.name).join(' + '):'',h2h&&x.cm?x.cm.list.reduce((s2,y)=>s2+(y.mods||1),0):0,
-      h2h?(d.eqOv?Math.round(x.eqD):f(`B${r}*Inputs!$B$9`,x.eqD)):0,h2h?(d.inOv?Math.round(x.inD):f(`J${r}*Inputs!$B$10`,x.inD)):0,
+      h2h?(d.eqOv?Math.round(x.eqD):f(Math.abs((x.hpC||x.m.hp)-x.m.hp)>1e-6?`${+(x.hpC||x.m.hp).toFixed(4)}*Inputs!$B$9`:`B${r}*Inputs!$B$9`,x.eqD)):0,h2h?(d.inOv?Math.round(x.inD):f(`J${r}*Inputs!$B$10`,x.inD)):0,
       +x.eerM.toFixed(2),h2h&&x.eerC?+x.eerC.toFixed(2):null,Math.round(x.kwhM),h2h?Math.round(x.kwhC||0):null];
     vals.forEach((v,j)=>{const cl=row.getCell(j+1);cl.value=v;cl.font=font(j===0?{bold:true}:{});cl.border={bottom:hair};if(i%2)cl.fill=fill(ZEB);
       cl.numFmt=[5,6,9,10].includes(j)?PESO:[11,12].includes(j)?'0.00':[13,14].includes(j)?NUM:j===1?'0':'#,##0';
@@ -1388,21 +1479,21 @@ async function exportXlsx(){
   const hd=['Year','Discount factor','MBT capex (₱)','MBT energy (₱)','MBT maintenance (₱)','MBT present value (₱)','MBT cumulative PV (₱)'];
   if(h2h)hd.push(`${cn} capex (₱)`,`${cn} energy (₱)`,`${cn} maintenance (₱)`,`${cn} present value (₱)`,`${cn} cumulative PV (₱)`);
   head(wsC,1,hd,40);
-  const side=(cols,eq,ins,kwh,dem,srp)=>{const [C,E,M,PV,CUM]=cols;
+  const side=(cols,eq,ins,kwh,dem,srp,mp)=>{const [C,E,M,PV,CUM]=cols;
     for(let t=0;t<=N;t++){const r=t+2;
       wsC.getCell(`${C}${r}`).value={formula:`IF(A${r}=0,${eq}+${ins},0)`};
       wsC.getCell(`${E}${r}`).value={formula:`IF(A${r}=0,0,(${kwh}*${I(2)}+${dem})*(1+${I(3)})^(A${r}-1))`};
-      wsC.getCell(`${M}${r}`).value={formula:`IF(A${r}=0,0,${srp}*${I(12)}/${I(13)})`};
+      wsC.getCell(`${M}${r}`).value={formula:`IF(A${r}=0,0,${srp}*${mp}/${I(13)})`};
       wsC.getCell(`${PV}${r}`).value={formula:`(${C}${r}+${E}${r}+${M}${r})*B${r}`};
       wsC.getCell(`${CUM}${r}`).value={formula:t===0?`${PV}${r}`:`${CUM}${r-1}+${PV}${r}`}}};
   const last=N+2,rr=N+4,cols=h2h?12:7;
   for(let t=0;t<=N;t++){const r=t+2;wsC.getCell(`A${r}`).value=t;wsC.getCell(`B${r}`).value={formula:`1/(1+${I(4)})^A${r}`}}
-  side(['C','D','E','F','G'],I(19),I(20),I(14),I(16),I(23));
-  if(h2h)side(['H','I','J','K','L'],I(21),I(22),I(15),I(17),I(24));
+  side(['C','D','E','F','G'],`${I(19)}+${I(27)}`,I(20),I(14),I(16),I(23),I(26));
+  if(h2h)side(['H','I','J','K','L'],I(21),I(22),I(15),I(17),I(24),I(12));
   for(let r=2;r<=last;r++){const row=wsC.getRow(r);row.height=17;for(let k=1;k<=cols;k++){const cl=row.getCell(k);cl.font=font(k===1?{bold:true}:{});cl.numFmt=k===1?'"Year "0':k===2?'0.0000':PESO;cl.alignment={horizontal:k===1?'left':'right'};cl.border={bottom:hair};if(r%2)cl.fill=fill(ZEB);if(k===7||k===12)cl.font=font({bold:true,color:{argb:k===7?BLUE:INK}})}}
   wsC.getCell('A2').numFmt='"Buy"';
   const trow2=wsC.getRow(rr);trow2.getCell(1).value='Total cost of ownership (present value, less residual value)';wsC.mergeCells(rr,1,rr,5);
-  trow2.getCell(6).value=f(`SUM(F2:F${last})-IF(${I(5)}<${I(6)},C2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,R.M.tco);
+  trow2.getCell(6).value=f(`SUM(F2:F${last})-IF(${I(5)}<${I(25)},C2*(${I(25)}-${I(5)})/${I(25)}/(1+${I(4)})^${I(5)},0)`,R.M.tco);
   if(h2h)trow2.getCell(11).value=f(`SUM(K2:K${last})-IF(${I(5)}<${I(6)},H2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,R.D.tco);
   trow2.getCell(1).alignment={horizontal:'left',vertical:'middle'};for(let k=1;k<=cols;k++){const cl=trow2.getCell(k);cl.font=font({bold:true,size:11});cl.fill=fill(SOFT);cl.border={top:{style:'thin',color:{argb:NAVY}},bottom:{style:'double',color:{argb:NAVY}}};if(k>1){cl.numFmt=PESO;cl.alignment={horizontal:'right'}}}
   trow2.height=24;
@@ -1416,7 +1507,7 @@ async function exportXlsx(){
   const hr=10;head(wsS,hr,h2h?['Cost (₱, present value)','MBT VC Max',cn,'Difference']:['Cost (₱, present value)','MBT VC Max']);
   const pvCol=(col)=>`SUMPRODUCT('Cash flow'!$B$2:$B$${last},'Cash flow'!$${col}$2:$${col}$${last})`;
   const resid=(capcol)=>`IF(${I(5)}<${I(6)},'Cash flow'!${capcol}2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`;
-  const lines=[['Equipment',f(I(19),R.M.equip),f(I(21),R.D.equip)],['Installation',f(I(20),R.M.inst),f(I(22),R.D.inst)],['Energy',f(pvCol('D'),R.M.pvE),f(pvCol('I'),R.D.pvE)],['Maintenance and repairs',f(pvCol('E'),R.M.pvM),f(pvCol('J'),R.D.pvM)],['Less residual value',f('-'+resid('C'),-R.M.resid),f('-'+resid('H'),-R.D.resid)]];
+  const lines=[['Equipment',f(`${I(19)}+${I(27)}`,R.M.equip+R.M.gw),f(I(21),R.D.equip)],['Installation',f(I(20),R.M.inst),f(I(22),R.D.inst)],['Energy',f(pvCol('D'),R.M.pvE),f(pvCol('I'),R.D.pvE)],['Maintenance and repairs',f(pvCol('E'),R.M.pvM),f(pvCol('J'),R.D.pvM)],['Less residual value',f('-'+resid('C').split(I(6)).join(I(25)),-R.M.resid),f('-'+resid('H'),-R.D.resid)]];
   lines.forEach(([l,m,d],i)=>{const r=hr+1+i,row=wsS.getRow(r);row.getCell(1).value=l;row.getCell(2).value=m;if(h2h){row.getCell(3).value=d;row.getCell(4).value={formula:`C${r}-B${r}`}}
     for(let k=1;k<=span;k++){const cl=row.getCell(k);cl.font=font({});cl.border={bottom:hair};if(k>1){cl.numFmt=PESO;cl.alignment={horizontal:'right'}}}row.height=19});
   const tr3=hr+1+lines.length,row3=wsS.getRow(tr3);row3.getCell(1).value='Total cost of ownership';row3.getCell(2).value=f(`SUM(B${hr+1}:B${tr3-1})`,R.M.tco);if(h2h){row3.getCell(3).value=f(`SUM(C${hr+1}:C${tr3-1})`,R.D.tco);row3.getCell(4).value=f(`C${tr3}-B${tr3}`,R.save)}
@@ -1952,7 +2043,7 @@ function render(focusTop,soft){
   if(focusTop)window.scrollTo({top:0,behavior:'instant'});
   wireDrop();save();ensureModels();
 }
-function rerenderResults(full){const R=compute();if(full){const el=$('#res');if(el)el.innerHTML=resBody(R)}else{$('#kpiBox').innerHTML=kpiHtml(R);$('#barBox').innerHTML=barChart(R);$('#lineBox').innerHTML=lineChart(R);$('#sysBox').innerHTML=sysHtml(R);$('#simBox').innerHTML=simHtml(R);$('#mapBox').innerHTML=effMapHtml();const wv=wiVals();[['wi-t','tariff'],['wi-h','hours'],['wi-p','priceD']].forEach(([id,k])=>{const n=document.getElementById(id+'-v');if(n)n.textContent=`${S.wi[k]>0?'+':''}${S.wi[k]}% · ${wv[k]}`})}save()}
+function rerenderResults(full){const R=compute();if(full){const el=$('#res');if(el)el.innerHTML=resBody(R)}else{$('#kpiBox').innerHTML=kpiHtml(R);$('#barBox').innerHTML=barChart(R);$('#lineBox').innerHTML=lineChart(R);$('#sysBox').innerHTML=sysHtml(R);$('#simBox').innerHTML=simHtml(R);{const fb=$('#featBox');if(fb)fb.innerHTML=featHtml(R)}$('#mapBox').innerHTML=effMapHtml();const wv=wiVals();[['wi-t','tariff'],['wi-h','hours'],['wi-p','priceD']].forEach(([id,k])=>{const n=document.getElementById(id+'-v');if(n)n.textContent=`${S.wi[k]>0?'+':''}${S.wi[k]}% · ${wv[k]}`})}save()}
 document.addEventListener('click',e=>{
   const t=e.target.closest('button,[data-go],tr[data-isel]');if(!t)return;
   const D=t.dataset;
@@ -2007,7 +2098,7 @@ document.addEventListener('change',e=>{
   if(D.stwho){ST.who=t.value;paintStudies();return}
   if(D.lp){const v=parseFloat(t.value.replace(/[^\d.]/g,''));if(!isNaN(v))t.value=num(Math.round(v))}
   if(D.ci){render();return}
-  if(D.c==='euDisc'||D.c==='instPct'||D.c==='priceM'||D.c==='priceD'||D.c==='mntPct'||D.c==='mntYrs'){render();return}
+  if(D.c==='euDisc'||D.c==='instPct'||D.c==='priceM'||D.c==='priceD'||D.c==='mntPct'||D.c==='mntYrs'||['sbD','rsRatio','divPct','metaPct','dlPct','pmPct','gwCost','lifeYrs'].includes(D.c)){render();return}
   if(D.cs){S.costs[D.cs]=+t.value;save()}
   if(D.cstr){S.costs[D.cstr]=t.value;save()}
   if(D.cb){S.costs[D.cb]=t.checked;if(t.checked)S.costs.tier=2;render()}
