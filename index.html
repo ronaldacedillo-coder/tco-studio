@@ -1280,7 +1280,8 @@ function sheet(R){
 /* ---------- exports: Excel backup, PDF report, PowerPoint deck ---------- */
 const LIBS={
   pdf:['https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js','https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js'],
-  pptx:['https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js']
+  pptx:['https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js'],
+  xlsx:['https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js']
 };
 const _loaded={};
 function loadScript(u){return _loaded[u]||(_loaded[u]=new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=()=>{delete _loaded[u];rej(new Error('Could not load '+u))};document.head.appendChild(s)}))}
@@ -1318,70 +1319,131 @@ function studyFacts(R){
 }
 
 /* ----- Excel backup with live formulas ----- */
-function exportXlsx(){
-  if(typeof XLSX==='undefined'){toast('Spreadsheet library did not load');return}
+async function exportXlsx(){
+  await loadLib('xlsx');
+  if(typeof ExcelJS==='undefined'){toast('Spreadsheet library did not load');return}
   const R=compute(),F=studyFacts(R),{p,c,h2h,cn}=F,N=R.N,CN=h2h?cn:'Competitor';
   const pD=h2h&&c.priceD?c.priceD*(1+S.wi.priceD/100):c.priceD;
-  const wb=XLSX.utils.book_new();const n=R.sys.length,r1=2,rn=n+1;
-  // Systems (prices per unit, live formulas where no system price was entered)
-  const sh=[['System','HP per unit','Qty','MBT model','MBT cabinets per unit','MBT equipment per unit','MBT installation per unit',`${CN} model`,`${CN} cabinets per unit`,`${CN} equipment per unit`,`${CN} installation per unit`,'MBT seasonal EER',`${CN} seasonal EER`,'MBT kWh/yr',`${CN} kWh/yr`]];
-  R.sys.forEach(x=>sh.push([x.l.sys||'System',x.m.hp,x.q,x.m.model,x.m.mods,null,null,h2h&&x.cm?x.cm.list.map(y=>y.name).join(' + '):'',h2h&&x.cm?x.cm.list.reduce((s2,y)=>s2+(y.mods||1),0):0,null,null,+x.eerM.toFixed(2),h2h&&x.eerC?+x.eerC.toFixed(2):'',Math.round(x.kwhM),h2h?Math.round(x.kwhC||0):'']));
-  const wsY=XLSX.utils.aoa_to_sheet(sh);
-  R.sys.forEach((x,i)=>{const r=i+2,a=linePrice(x,'m',pD),d=h2h?linePrice(x,'d',pD):null;
-    wsY[`F${r}`]=a.eqOv?{t:'n',v:Math.round(x.eqM),z:'#,##0'}:{t:'n',f:`B${r}*Inputs!$B$8`,z:'#,##0'};
-    wsY[`G${r}`]=a.inOv?{t:'n',v:Math.round(x.inM),z:'#,##0'}:{t:'n',f:`F${r}*Inputs!$B$10`,z:'#,##0'};
-    if(h2h){wsY[`J${r}`]=d.eqOv?{t:'n',v:Math.round(x.eqD),z:'#,##0'}:{t:'n',f:`B${r}*Inputs!$B$9`,z:'#,##0'};
-      wsY[`K${r}`]=d.inOv?{t:'n',v:Math.round(x.inD),z:'#,##0'}:{t:'n',f:`J${r}*Inputs!$B$10`,z:'#,##0'}}else{wsY[`J${r}`]={t:'n',v:0};wsY[`K${r}`]={t:'n',v:0}}});
-  wsY[`A${n+3}`]={t:'s',v:'Formulas use the Inputs sheet; typed numbers are system prices entered in TCO Studio or read from the BOQ.'};
-  wsY[`A${n+4}`]={t:'s',v:'Method: '+F.energy};
-  wsY['!ref']=`A1:O${n+4}`;wsY['!cols']=[{wch:12},{wch:8},{wch:6},{wch:18},{wch:9},{wch:14},{wch:14},{wch:20},{wch:9},{wch:14},{wch:14},{wch:10},{wch:10},{wch:11},{wch:11}];
-  // Inputs
-  const inp=[['Input','Value','Unit / note'],
-    ['Electricity rate',R.T,'PHP/kWh'],['Yearly rate increase',c.esc/100,'%'],['Discount rate',c.disc/100,'%'],['Study period',N,'years'],['Service life',c.life||15,'years (residual value if study is shorter)'],
-    ['Total outdoor HP',R.hp,'HP'],['MBT price (default)',c.priceM*(1-(c.euDisc||0)/100),`PHP/HP, used where no system price${c.euDisc?` (SRP ${nf(c.priceM)} less ${c.euDisc}% end-user discount)`:''}`],[`${CN} price (default)`,h2h?pD:0,'PHP/HP, used where no system price'],
-    ['Installation allowance',c.instPct/100,'% of SRP, used where no contractor figure (typed per system when a discount applies)'],['Installation quoted by contractor (MBT)',c.cInstM!=null?c.cInstM:0,c.cInstM!=null?'PHP, shared over systems by equipment cost (typed in Systems)':'none, estimate used'],
-    ['Maintenance allowance',c.mntPct/100,'% of SRP over the span (maintenance and repairs)'],['Maintenance span',c.mntYrs,'years; same yearly amount continues after'],
-    ['MBT energy',R.M.kwh,'kWh/yr (from simulation, incl. indoor fans)'],[`${CN} energy`,h2h?R.D.kwh:0,'kWh/yr (from simulation, incl. indoor fans)'],
-    ['MBT demand charges',R.M.demYr,'PHP/yr'],[`${CN} demand charges`,h2h?R.D.demYr:0,'PHP/yr'],['Grid emission factor',c.ef,'tCO2/MWh'],
-    ['MBT equipment total',null,'PHP, from Systems'],['MBT installation total',null,'PHP, from Systems'],[`${CN} equipment total`,null,'PHP, from Systems'],[`${CN} installation total`,null,'PHP, from Systems'],['MBT equipment at SRP',R.M.srp,'PHP, before end-user discount'],[`${CN} equipment at SRP`,h2h?R.D.srp:0,'PHP']];
-  const wsI=XLSX.utils.aoa_to_sheet(inp);
-  const sp=(col)=>`SUMPRODUCT(Systems!$C$${r1}:$C$${rn},Systems!$${col}$${r1}:$${col}$${rn})`;
-  wsI.B19={t:'n',f:sp('F'),z:'#,##0'};wsI.B20={t:'n',f:sp('G'),z:'#,##0'};wsI.B21={t:'n',f:sp('J'),z:'#,##0'};wsI.B22={t:'n',f:sp('K'),z:'#,##0'};
-  ['B3','B4','B10','B12'].forEach(k=>{if(wsI[k])wsI[k].z='0.0%'});wsI.B2.z='0.00';['B8','B9','B11','B14','B15','B16','B17','B23','B24'].forEach(k=>{if(wsI[k])wsI[k].z='#,##0'});
-  wsI['!cols']=[{wch:30},{wch:16},{wch:40}];
-  // Cash flow
+  const n=R.sys.length,r1=2,rn=n+1;
+  // ---- look ----
+  const NAVY='FF0D1F3C',BLUE='FF0A63CE',SOFT='FFEEF4FB',ZEB='FFF7F9FC',LINE='FFD9DEE5',INK='FF1D1D1F',MUTED='FF6E6E73',INPUT='FF0000FF',INFILL='FFFFF8DB',GOOD='FF1E8A4A';
+  const font=(o)=>({name:'Arial',size:10,color:{argb:INK},...o});
+  const fill=a=>({type:'pattern',pattern:'solid',fgColor:{argb:a}});
+  const hair={style:'thin',color:{argb:LINE}};
+  const PESO='"₱"#,##0;[Red]-"₱"#,##0;"–"',NUM='#,##0;[Red]-#,##0;"–"',PCT='0.0%',KWH='#,##0" kWh"';
+  const wb=new ExcelJS.Workbook();wb.creator='MBT TCO Studio';wb.created=new Date();wb.calcProperties.fullCalcOnLoad=true;
+  const sheet=(name,tab,opt={})=>wb.addWorksheet(name,{properties:{tabColor:{argb:tab}},views:[{showGridLines:false,...(opt.freeze?{state:'frozen',ySplit:opt.freeze,xSplit:opt.xSplit||0}:{})}],pageSetup:{orientation:opt.portrait?'portrait':'landscape',fitToPage:true,fitToWidth:1,fitToHeight:0,paperSize:9,margins:{left:.5,right:.5,top:.6,bottom:.6,header:.3,footer:.3}},headerFooter:{oddFooter:'&L&8MBT TCO Studio · '+p.name.replace(/&/g,'&&')+'&R&8Page &P of &N'}});
+  const head=(ws,row,cols,hgt)=>{const r=ws.getRow(row);cols.forEach((t,i)=>{const cl=r.getCell(i+1);cl.value=t;cl.font=font({bold:true,color:{argb:'FFFFFFFF'}});cl.fill=fill(NAVY);cl.alignment={vertical:'middle',horizontal:i?'center':'left',wrapText:true};cl.border={bottom:{style:'thin',color:{argb:NAVY}}}});r.height=hgt||30};
+  const title=(ws,text,sub,span)=>{ws.mergeCells(1,1,1,span);const a=ws.getCell(1,1);a.value=text;a.font=font({size:16,bold:true,color:{argb:'FFFFFFFF'}});a.fill=fill(NAVY);a.alignment={vertical:'middle',indent:1};ws.getRow(1).height=34;
+    ws.mergeCells(2,1,2,span);const b=ws.getCell(2,1);b.value=sub;b.font=font({size:10,color:{argb:MUTED}});b.alignment={vertical:'middle',indent:1};ws.getRow(2).height=20};
+  const f=(formula,result)=>result==null||isNaN(result)?{formula}:{formula,result};
   const I=k=>`Inputs!$B$${k}`;
-  const head=['Year','Discount factor','MBT capex','MBT energy','MBT maintenance','MBT present value','MBT cumulative PV'];
-  if(h2h)head.push(`${cn} capex`,`${cn} energy`,`${cn} maintenance`,`${cn} present value`,`${cn} cumulative PV`);
-  const cf=[head];for(let t=0;t<=N;t++)cf.push([t]);
-  const wsC=XLSX.utils.aoa_to_sheet(cf);
+
+  // ---- Inputs (row numbers are referenced by every other sheet) ----
+  const wsI=sheet('Inputs','FF8DBBEB',{freeze:1,portrait:true});
+  head(wsI,1,['Input','Value','Unit / note']);
+  const inp=[
+    ['Electricity rate',R.T,'₱ per kWh','0.00',1],['Yearly rate increase',c.esc/100,'per year',PCT,1],['Discount rate',c.disc/100,'client cost of money',PCT,1],['Study period',N,'years','0',1],['Service life',c.life||15,'years (residual value if the study is shorter)','0',1],
+    ['Total outdoor HP',R.hp,'HP','#,##0',0],['MBT price (default)',c.priceM*(1-(c.euDisc||0)/100),`₱ per HP where no system price${c.euDisc?` (SRP ${nf(c.priceM)} less ${c.euDisc}% end-user discount)`:''}`,PESO,1],[`${CN} price (default)`,h2h?pD:0,'₱ per HP where no system price',PESO,1],
+    ['Installation allowance',c.instPct/100,'of SRP, where no contractor figure',PCT,1],['Installation quoted by contractor (MBT)',c.cInstM!=null?c.cInstM:0,c.cInstM!=null?'₱, shared over systems by equipment cost':'none: allowance used',PESO,1],
+    ['Maintenance allowance',c.mntPct/100,'of SRP over the span (maintenance and repairs)',PCT,1],['Maintenance span',c.mntYrs,'years; same yearly amount continues after','0',1],
+    ['MBT energy',R.M.kwh,'kWh per year, part-load simulation incl. indoor fans',NUM,0],[`${CN} energy`,h2h?R.D.kwh:0,'kWh per year, part-load simulation incl. indoor fans',NUM,0],
+    ['MBT demand charges',R.M.demYr,'₱ per year',PESO,0],[`${CN} demand charges`,h2h?R.D.demYr:0,'₱ per year',PESO,0],['Grid emission factor',c.ef,'tCO₂ per MWh','0.00',1],
+    ['MBT equipment total',null,'₱, from Systems',PESO,2],['MBT installation total',null,'₱, from Systems',PESO,2],[`${CN} equipment total`,null,'₱, from Systems',PESO,2],[`${CN} installation total`,null,'₱, from Systems',PESO,2],
+    ['MBT equipment at SRP',R.M.srp,'₱, before end-user discount',PESO,0],[`${CN} equipment at SRP`,h2h?R.D.srp:0,'₱',PESO,0]];
+  const sp=(col,res)=>f(`SUMPRODUCT(Systems!$C$${r1}:$C$${rn},Systems!$${col}$${r1}:$${col}$${rn})`,res);
+  const tot={19:sp('F',R.M.equip),20:sp('G',R.M.inst),21:sp('J',h2h?R.D.equip:0),22:sp('K',h2h?R.D.inst:0)};
+  inp.forEach(([l,v,u,z,kind],i)=>{const r=i+2,row=wsI.getRow(r);row.getCell(1).value=l;row.getCell(2).value=tot[r]||v;row.getCell(3).value=u;row.height=18;
+    row.getCell(1).font=font({});row.getCell(3).font=font({color:{argb:MUTED},size:9});
+    const b=row.getCell(2);b.numFmt=z;b.alignment={horizontal:'right'};b.font=font(kind===1?{color:{argb:INPUT}}:kind===2?{bold:true}:{});if(kind===1)b.fill=fill(INFILL);
+    [1,2,3].forEach(k=>row.getCell(k).border={bottom:hair})});
+  wsI.getColumn(1).width=38;wsI.getColumn(2).width=18;wsI.getColumn(3).width=52;
+  const lg=inp.length+3;
+  wsI.getCell(lg,1).value='How to use';wsI.getCell(lg,1).font=font({bold:true});
+  wsI.getCell(lg+1,1).value='Blue on yellow = assumption you can change. Black = formula or value from the TCO Studio simulation. Every total in the workbook recalculates from these cells.';
+  wsI.mergeCells(lg+1,1,lg+1,3);wsI.getCell(lg+1,1).font=font({color:{argb:MUTED},size:9});wsI.getCell(lg+1,1).alignment={wrapText:true,vertical:'top'};wsI.getRow(lg+1).height=28;
+
+  // ---- Systems ----
+  const wsY=sheet('Systems','FF0A63CE',{freeze:1,xSplit:1});
+  head(wsY,1,['System','HP per unit','Qty','MBT model','MBT cabinets','MBT equipment per unit (₱)','MBT installation per unit (₱)',`${CN} model`,`${CN} cabinets`,`${CN} equipment per unit (₱)`,`${CN} installation per unit (₱)`,'MBT seasonal EER',`${CN} seasonal EER`,'MBT kWh per year',`${CN} kWh per year`],46);
+  R.sys.forEach((x,i)=>{const r=i+2,a=linePrice(x,'m',pD),d=h2h?linePrice(x,'d',pD):null,row=wsY.getRow(r);
+    const vals=[x.l.sys||'System',x.m.hp,x.q,x.m.model,x.m.mods,
+      a.eqOv?Math.round(x.eqM):f(`B${r}*Inputs!$B$8`,x.eqM),a.inOv?Math.round(x.inM):f(`F${r}*Inputs!$B$10`,x.inM),
+      h2h&&x.cm?x.cm.list.map(y=>y.name).join(' + '):'',h2h&&x.cm?x.cm.list.reduce((s2,y)=>s2+(y.mods||1),0):0,
+      h2h?(d.eqOv?Math.round(x.eqD):f(`B${r}*Inputs!$B$9`,x.eqD)):0,h2h?(d.inOv?Math.round(x.inD):f(`J${r}*Inputs!$B$10`,x.inD)):0,
+      +x.eerM.toFixed(2),h2h&&x.eerC?+x.eerC.toFixed(2):null,Math.round(x.kwhM),h2h?Math.round(x.kwhC||0):null];
+    vals.forEach((v,j)=>{const cl=row.getCell(j+1);cl.value=v;cl.font=font(j===0?{bold:true}:{});cl.border={bottom:hair};if(i%2)cl.fill=fill(ZEB);
+      cl.numFmt=[5,6,9,10].includes(j)?PESO:[11,12].includes(j)?'0.00':[13,14].includes(j)?NUM:j===1?'0':'#,##0';
+      if(j>=1&&j!==3&&j!==7)cl.alignment={horizontal:'right'};else if(j===3||j===7){cl.font=font({name:'Consolas',size:9.5});cl.alignment={horizontal:'left',indent:1}}});
+    [[6,a.eqOv],[7,a.inOv],[10,d&&d.eqOv],[11,d&&d.inOv]].forEach(([k,ov])=>{if(ov)row.getCell(k).font=font({color:{argb:INPUT}})});row.height=19});
+  const tr=n+2,trow=wsY.getRow(tr);trow.getCell(1).value='Total';
+  const tf={2:f(`SUMPRODUCT(B${r1}:B${rn},C${r1}:C${rn})`,R.hp),3:f(`SUM(C${r1}:C${rn})`),6:f(`SUMPRODUCT(C${r1}:C${rn},F${r1}:F${rn})`,R.M.equip),7:f(`SUMPRODUCT(C${r1}:C${rn},G${r1}:G${rn})`,R.M.inst),10:f(`SUMPRODUCT(C${r1}:C${rn},J${r1}:J${rn})`,h2h?R.D.equip:0),11:f(`SUMPRODUCT(C${r1}:C${rn},K${r1}:K${rn})`,h2h?R.D.inst:0),14:f(`SUMPRODUCT(C${r1}:C${rn},N${r1}:N${rn})`),15:h2h?f(`SUMPRODUCT(C${r1}:C${rn},O${r1}:O${rn})`):null};
+  for(let k=1;k<=15;k++){const cl=trow.getCell(k);if(tf[k]!==undefined&&tf[k]!==null)cl.value=tf[k];cl.font=font({bold:true});cl.fill=fill(SOFT);cl.border={top:{style:'thin',color:{argb:NAVY}},bottom:{style:'double',color:{argb:NAVY}}};cl.numFmt=[6,7,10,11].includes(k)?PESO:k===2?'#,##0" HP"':NUM;if(k>1)cl.alignment={horizontal:'right'}}
+  trow.height=20;
+  [[n+4,'Blue = price typed in TCO Studio or taken from the BOQ or quotation (SRP less the end-user discount). Black = formula from the Inputs sheet.'],[n+5,'Method: '+F.energy]].forEach(([r,t])=>{wsY.mergeCells(r,1,r,15);const cl=wsY.getCell(r,1);cl.value=t;cl.font=font({size:9,color:{argb:MUTED}});cl.alignment={wrapText:true,vertical:'top'};wsY.getRow(r).height=r===n+4?16:42});
+  [14,9,7,20,10,18,18,24,11,18,18,12,12,14,14].forEach((w,i)=>wsY.getColumn(i+1).width=w);
+
+  // ---- Cash flow ----
+  const wsC=sheet('Cash flow','FF3A4658',{freeze:1,xSplit:1});
+  const hd=['Year','Discount factor','MBT capex (₱)','MBT energy (₱)','MBT maintenance (₱)','MBT present value (₱)','MBT cumulative PV (₱)'];
+  if(h2h)hd.push(`${cn} capex (₱)`,`${cn} energy (₱)`,`${cn} maintenance (₱)`,`${cn} present value (₱)`,`${cn} cumulative PV (₱)`);
+  head(wsC,1,hd,40);
   const side=(cols,eq,ins,kwh,dem,srp)=>{const [C,E,M,PV,CUM]=cols;
     for(let t=0;t<=N;t++){const r=t+2;
-      wsC[`${C}${r}`]={t:'n',f:`IF(A${r}=0,${eq}+${ins},0)`,z:'#,##0'};
-      wsC[`${E}${r}`]={t:'n',f:`IF(A${r}=0,0,(${kwh}*${I(2)}+${dem})*(1+${I(3)})^(A${r}-1))`,z:'#,##0'};
-      wsC[`${M}${r}`]={t:'n',f:`IF(A${r}=0,0,${srp}*${I(12)}/${I(13)})`,z:'#,##0'};
-      wsC[`${PV}${r}`]={t:'n',f:`(${C}${r}+${E}${r}+${M}${r})*B${r}`,z:'#,##0'};
-      wsC[`${CUM}${r}`]={t:'n',f:t===0?`${PV}${r}`:`${CUM}${r-1}+${PV}${r}`,z:'#,##0'};}};
-  for(let t=0;t<=N;t++){const r=t+2;wsC[`B${r}`]={t:'n',f:`1/(1+${I(4)})^A${r}`,z:'0.0000'}}
+      wsC.getCell(`${C}${r}`).value={formula:`IF(A${r}=0,${eq}+${ins},0)`};
+      wsC.getCell(`${E}${r}`).value={formula:`IF(A${r}=0,0,(${kwh}*${I(2)}+${dem})*(1+${I(3)})^(A${r}-1))`};
+      wsC.getCell(`${M}${r}`).value={formula:`IF(A${r}=0,0,${srp}*${I(12)}/${I(13)})`};
+      wsC.getCell(`${PV}${r}`).value={formula:`(${C}${r}+${E}${r}+${M}${r})*B${r}`};
+      wsC.getCell(`${CUM}${r}`).value={formula:t===0?`${PV}${r}`:`${CUM}${r-1}+${PV}${r}`}}};
+  const last=N+2,rr=N+4,cols=h2h?12:7;
+  for(let t=0;t<=N;t++){const r=t+2;wsC.getCell(`A${r}`).value=t;wsC.getCell(`B${r}`).value={formula:`1/(1+${I(4)})^A${r}`}}
   side(['C','D','E','F','G'],I(19),I(20),I(14),I(16),I(23));
   if(h2h)side(['H','I','J','K','L'],I(21),I(22),I(15),I(17),I(24));
-  const last=N+2,rr=N+4;
-  wsC[`A${rr}`]={t:'s',v:'Total cost of ownership (PV, less residual value)'};
-  wsC[`F${rr}`]={t:'n',f:`SUM(F2:F${last})-IF(${I(5)}<${I(6)},C2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,z:'#,##0'};
-  if(h2h)wsC[`K${rr}`]={t:'n',f:`SUM(K2:K${last})-IF(${I(5)}<${I(6)},H2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,z:'#,##0'};
-  wsC['!ref']=`A1:${h2h?'L':'G'}${rr}`;wsC['!cols']=[{wch:8},{wch:12},...Array(h2h?10:5).fill({wch:16})];
-  // Summary
-  const wsS=XLSX.utils.aoa_to_sheet([['TCO study',p.name],['Client',p.client],['Location',p.city],['Prepared',new Date().toISOString().slice(0,10)],[],['Result','Value']]);
-  const put=(r,l,f,z)=>{wsS[`A${r}`]={t:'s',v:l};wsS[`B${r}`]={t:'n',f,z:z||'#,##0'}};
-  put(7,'MBT upfront cost (PHP)',`${I(19)}+${I(20)}`);put(8,'MBT total cost of ownership (PHP)',`'Cash flow'!F${rr}`);
-  if(h2h){put(9,`${cn} upfront cost (PHP)`,`${I(21)}+${I(22)}`);put(10,`${cn} total cost of ownership (PHP)`,`'Cash flow'!K${rr}`);put(11,'MBT saving (negative = MBT costs more)','B10-B8');put(12,'MBT energy (kWh/yr)',I(14));put(13,`${cn} energy (kWh/yr)`,I(15));put(14,'Energy difference (kWh/yr, + = MBT saves)','B13-B12');put(15,'CO2 difference (t/yr)',`B14*${I(18)}/1000`,'0.0')}
-  else put(9,'MBT energy (kWh/yr)',I(14));
-  wsS.A17={t:'s',v:'Energy per year comes from the part-load simulation in TCO Studio. Change prices on the Systems sheet or rates on the Inputs sheet and the totals recalculate.'};
-  wsS['!ref']='A1:B17';wsS['!cols']=[{wch:44},{wch:22}];
-  const wsA=XLSX.utils.aoa_to_sheet([['Assumption','Value','Source'],...F.assumptions]);wsA['!cols']=[{wch:28},{wch:44},{wch:36}];
-  XLSX.utils.book_append_sheet(wb,wsS,'Summary');XLSX.utils.book_append_sheet(wb,wsI,'Inputs');XLSX.utils.book_append_sheet(wb,wsY,'Systems');XLSX.utils.book_append_sheet(wb,wsC,'Cash flow');XLSX.utils.book_append_sheet(wb,wsA,'Assumptions');
-  const out=XLSX.write(wb,{type:'array',bookType:'xlsx'});
-  return saveFile(`${fileBase()}_TCO_backup.xlsx`,new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+  for(let r=2;r<=last;r++){const row=wsC.getRow(r);row.height=17;for(let k=1;k<=cols;k++){const cl=row.getCell(k);cl.font=font(k===1?{bold:true}:{});cl.numFmt=k===1?'"Year "0':k===2?'0.0000':PESO;cl.alignment={horizontal:k===1?'left':'right'};cl.border={bottom:hair};if(r%2)cl.fill=fill(ZEB);if(k===7||k===12)cl.font=font({bold:true,color:{argb:k===7?BLUE:INK}})}}
+  wsC.getCell('A2').numFmt='"Buy"';
+  const trow2=wsC.getRow(rr);trow2.getCell(1).value='Total cost of ownership (present value, less residual value)';wsC.mergeCells(rr,1,rr,5);
+  trow2.getCell(6).value=f(`SUM(F2:F${last})-IF(${I(5)}<${I(6)},C2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,R.M.tco);
+  if(h2h)trow2.getCell(11).value=f(`SUM(K2:K${last})-IF(${I(5)}<${I(6)},H2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`,R.D.tco);
+  trow2.getCell(1).alignment={horizontal:'left',vertical:'middle'};for(let k=1;k<=cols;k++){const cl=trow2.getCell(k);cl.font=font({bold:true,size:11});cl.fill=fill(SOFT);cl.border={top:{style:'thin',color:{argb:NAVY}},bottom:{style:'double',color:{argb:NAVY}}};if(k>1){cl.numFmt=PESO;cl.alignment={horizontal:'right'}}}
+  trow2.height=24;
+  wsC.getColumn(1).width=10;wsC.getColumn(2).width=11;for(let k=3;k<=cols;k++)wsC.getColumn(k).width=17;
+
+  // ---- Summary (first tab) ----
+  const wsS=sheet('Summary','FF0D1F3C',{portrait:true});
+  const span=h2h?4:2;title(wsS,'Total cost of ownership',`${p.name}${p.client?' · '+p.client:''}`,span);
+  const info=[['Location',p.city],['Building',`${TYPES[p.type]?TYPES[p.type].t:p.type}, ${nf(R.H)} operating hours a year`],['Study period',`${N} years, values in today's pesos (discount rate ${c.disc}%)`],['Outdoor capacity',`${nf(R.hp)} HP in ${n} system${n===1?'':'s'}`],['Prepared',`${new Date().toISOString().slice(0,10)}${typeof ME!=='undefined'&&ME?' by '+ME.name:''}`]];
+  info.forEach(([l,v],i)=>{const r=4+i;wsS.getCell(r,1).value=l;wsS.getCell(r,1).font=font({color:{argb:MUTED}});wsS.getCell(r,2).value=v;wsS.getCell(r,2).font=font({bold:true});if(span>2)wsS.mergeCells(r,2,r,span)});
+  const hr=10;head(wsS,hr,h2h?['Cost (₱, present value)','MBT VC Max',cn,'Difference']:['Cost (₱, present value)','MBT VC Max']);
+  const pvCol=(col)=>`SUMPRODUCT('Cash flow'!$B$2:$B$${last},'Cash flow'!$${col}$2:$${col}$${last})`;
+  const resid=(capcol)=>`IF(${I(5)}<${I(6)},'Cash flow'!${capcol}2*(${I(6)}-${I(5)})/${I(6)}/(1+${I(4)})^${I(5)},0)`;
+  const lines=[['Equipment',f(I(19),R.M.equip),f(I(21),R.D.equip)],['Installation',f(I(20),R.M.inst),f(I(22),R.D.inst)],['Energy',f(pvCol('D'),R.M.pvE),f(pvCol('I'),R.D.pvE)],['Maintenance and repairs',f(pvCol('E'),R.M.pvM),f(pvCol('J'),R.D.pvM)],['Less residual value',f('-'+resid('C'),-R.M.resid),f('-'+resid('H'),-R.D.resid)]];
+  lines.forEach(([l,m,d],i)=>{const r=hr+1+i,row=wsS.getRow(r);row.getCell(1).value=l;row.getCell(2).value=m;if(h2h){row.getCell(3).value=d;row.getCell(4).value={formula:`C${r}-B${r}`}}
+    for(let k=1;k<=span;k++){const cl=row.getCell(k);cl.font=font({});cl.border={bottom:hair};if(k>1){cl.numFmt=PESO;cl.alignment={horizontal:'right'}}}row.height=19});
+  const tr3=hr+1+lines.length,row3=wsS.getRow(tr3);row3.getCell(1).value='Total cost of ownership';row3.getCell(2).value=f(`SUM(B${hr+1}:B${tr3-1})`,R.M.tco);if(h2h){row3.getCell(3).value=f(`SUM(C${hr+1}:C${tr3-1})`,R.D.tco);row3.getCell(4).value=f(`C${tr3}-B${tr3}`,R.save)}
+  for(let k=1;k<=span;k++){const cl=row3.getCell(k);cl.font=font({bold:true,size:11});cl.fill=fill(SOFT);cl.border={top:{style:'thin',color:{argb:NAVY}},bottom:{style:'double',color:{argb:NAVY}}};if(k>1){cl.numFmt=PESO;cl.alignment={horizontal:'right'}}}row3.height=24;
+  let r=tr3+2;
+  if(h2h){
+    wsS.mergeCells(r,1,r,span);const hl=wsS.getCell(r,1);hl.value=f(`IF(D${tr3}>=0,"MBT costs ₱"&TEXT(D${tr3},"#,##0")&" less over ${N} years","${cn.replace(/"/g,'')} costs ₱"&TEXT(-D${tr3},"#,##0")&" less over ${N} years")`,undefined);
+    hl.font=font({bold:true,size:14,color:{argb:'FFFFFFFF'}});hl.fill=fill(R.save>=0?GOOD:BLUE);hl.alignment={horizontal:'center',vertical:'middle'};wsS.getRow(r).height=32;r+=2;
+    head(wsS,r,['Energy and carbon','MBT VC Max',cn,'Difference']);r++;
+    [['Energy per year',f(I(14),R.M.kwh),f(I(15),R.D.kwh),KWH],['CO₂ per year (t)',f(`${I(14)}*${I(18)}/1000`,R.M.kwh*c.ef/1000),f(`${I(15)}*${I(18)}/1000`,R.D.kwh*c.ef/1000),'#,##0.0']].forEach(([l,m,d,z])=>{const row=wsS.getRow(r);row.getCell(1).value=l;row.getCell(2).value=m;row.getCell(3).value=d;row.getCell(4).value={formula:`C${r}-B${r}`};for(let k=1;k<=4;k++){const cl=row.getCell(k);cl.font=font({});cl.border={bottom:hair};if(k>1){cl.numFmt=z;cl.alignment={horizontal:'right'}}}row.height=19;r++});
+    r++;
+  }
+  wsS.mergeCells(r,1,r,span);const nt=wsS.getCell(r,1);nt.value='Difference = competitor minus MBT; a positive figure is MBT\'s advantage. Energy comes from the hour-by-hour part-load simulation in TCO Studio. Change prices on the Systems sheet or rates on the Inputs sheet and every total recalculates. Assumptions are listed on the last sheet.';
+  nt.font=font({size:9,color:{argb:MUTED}});nt.alignment={wrapText:true,vertical:'top'};wsS.getRow(r).height=40;
+  wsS.getColumn(1).width=30;for(let k=2;k<=span;k++)wsS.getColumn(k).width=20;
+
+  // ---- Assumptions ----
+  const wsA=sheet('Assumptions','FF6E6E73',{freeze:1,portrait:true});
+  head(wsA,1,['Assumption','Value','Source']);
+  F.assumptions.forEach((a,i)=>{const row=wsA.getRow(i+2);a.forEach((v,j)=>{const cl=row.getCell(j+1);cl.value=v;cl.font=font(j===0?{bold:true}:j===2?{color:{argb:MUTED},size:9}:{});cl.alignment={wrapText:true,vertical:'top'};cl.border={bottom:hair}});row.height=Math.max(18,Math.ceil(String(a[1]).length/52)*14+4)});
+  wsA.getColumn(1).width=26;wsA.getColumn(2).width=60;wsA.getColumn(3).width=30;
+
+  // tab order: Summary first
+  ['Summary','Inputs','Systems','Cash flow','Assumptions'].forEach((nm,i)=>{const w=wb.getWorksheet(nm);if(w)w.orderNo=i});
+  wb.views=[{activeTab:0,firstSheet:0,visibility:'visible'}];
+  const buf=await wb.xlsx.writeBuffer();
+  return saveFile(`${fileBase()}_TCO_backup.xlsx`,new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
 }
 
 /* ----- PDF report ----- */
